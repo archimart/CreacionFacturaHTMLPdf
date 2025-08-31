@@ -9,3 +9,5 @@ export const PAPER_PRESETS = {
 export function inchesToPx(inches, dpi) {
   return Math.round(inches * dpi);
 }
+
+export const WORK_BG = "#f5f6f8";

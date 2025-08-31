@@ -1,138 +1,86 @@
-export default function Inspector({ element, onChange, onDelete }) {
-  if (!element) {
-    return (
-      <div style={{ fontSize: 12, color: "#666" }}>
-        Selecciona un elemento para editar.
-      </div>
-    );
-  }
+import React, { useState } from "react";
 
-  const st = element.style || {};
+/**
+ * Inspector genérico por configuración.
+ * props:
+ *  - tabs: Array<{ key, title, icon?, render: (ctx) => ReactNode }>
+ *  - context: objeto que se pasa a cada render(ctx)
+ *  - initialKey?: string
+ */
+export default function Inspector({ tabs = [], context = {}, initialKey }) {
+  const safeTabs = Array.isArray(tabs) ? tabs : [];
+
+  const defaultKey =
+    initialKey && safeTabs.find((t) => t.key === initialKey)
+      ? initialKey
+      : safeTabs?.[0]?.key ?? "tab-0";
+
+  const [active, setActive] = useState(defaultKey);
+
+  const current = safeTabs.find((t) => t.key === active);
 
   return (
-    <div style={{ display: "grid", gap: 8, fontSize: 12 }}>
-      <strong>Propiedades</strong>
-
-      <label>
-        Ancho
-        <input
-          type="number"
-          min={10}
-          value={element.w}
-          onChange={(e) => onChange({ w: Number(e.target.value) })}
-          style={{ width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Alto
-        <input
-          type="number"
-          min={10}
-          value={element.h}
-          onChange={(e) => onChange({ h: Number(e.target.value) })}
-          style={{ width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Borde (px)
-        <input
-          type="number"
-          min={0}
-          value={st.borderWidth ?? 1}
-          onChange={(e) =>
-            onChange({ style: { ...st, borderWidth: Number(e.target.value) } })
-          }
-          style={{ width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Radio
-        <input
-          type="number"
-          min={0}
-          value={st.borderRadius ?? 6}
-          onChange={(e) =>
-            onChange({ style: { ...st, borderRadius: Number(e.target.value) } })
-          }
-          style={{ width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Color borde
-        <input
-          type="color"
-          value={st.borderColor ?? "#333333"}
-          onChange={(e) =>
-            onChange({ style: { ...st, borderColor: e.target.value } })
-          }
-          style={{ width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Fondo
-        <input
-          type="color"
-          value={st.background ?? "#ffffff"}
-          onChange={(e) =>
-            onChange({ style: { ...st, background: e.target.value } })
-          }
-          style={{ width: "100%" }}
-        />
-      </label>
-
-      {element.type === "text" && (
-        <>
-          {/* ...tamaño de fuente y color ya existentes... */}
-
-          <label>
-            Alineación horizontal
-            <select
-              value={st.textAlign ?? "left"}
-              onChange={(e) =>
-                onChange({ style: { ...st, textAlign: e.target.value } })
-              }
-              style={{ width: "100%" }}
-            >
-              <option value="left">Izquierda</option>
-              <option value="center">Centro</option>
-              <option value="right">Derecha</option>
-            </select>
-          </label>
-
-          <label>
-            Alineación vertical
-            <select
-              value={st.vAlign ?? "top"}
-              onChange={(e) =>
-                onChange({ style: { ...st, vAlign: e.target.value } })
-              }
-              style={{ width: "100%" }}
-            >
-              <option value="top">Arriba</option>
-              <option value="middle">Medio</option>
-              <option value="bottom">Abajo</option>
-            </select>
-          </label>
-        </>
-      )}
-
-      <button
-        onClick={onDelete}
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        height: "100%",
+        alignItems: "stretch",
+      }}
+    >
+      {/* Tabs */}
+      <div
+        role="tablist"
         style={{
-          marginTop: 6,
-          background: "#fee2e2",
-          border: "1px solid #ef4444",
-          borderRadius: 6,
-          padding: "6px 8px",
+          display: "flex",
+          gap: 16,
+          borderBottom: "1px solid #eef0f2",
+          paddingBottom: 6,
         }}
       >
-        Eliminar
-      </button>
+        {safeTabs.map((t) => {
+          const selected = t.key === active;
+          return (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setActive(t.key)}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontWeight: 700,
+                color: selected ? "#0ea5e9" : "#0f172a",
+                position: "relative",
+                padding: "6px 0",
+                cursor: "pointer",
+              }}
+            >
+              {t.icon ? <span style={{ marginRight: 6 }}>{t.icon}</span> : null}
+              {t.title}
+              {selected && (
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    bottom: -7,
+                    height: 3,
+                    background: "#0ea5e9",
+                    borderRadius: 3,
+                  }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Contenido */}
+      <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
+        {current?.render ? current.render(context) : null}
+      </div>
     </div>
   );
 }

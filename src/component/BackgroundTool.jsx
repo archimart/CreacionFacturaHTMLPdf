@@ -1,5 +1,4 @@
-import { useRef } from "react";
-import IconButton from "./IconButton";
+import React, { useRef } from "react";
 
 export default function BackgroundTool({
   onPickFile,
@@ -7,54 +6,72 @@ export default function BackgroundTool({
   hasBackground,
   fit,
   onChangeFit,
+  compact = true,
 }) {
   const inputRef = useRef(null);
 
   const openPicker = () => inputRef.current?.click();
-  const handleChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) onPickFile(file);
-    e.target.value = "";
+
+  const onFile = (e) => {
+    const f = e.target.files?.[0];
+    if (f) onPickFile(f);
+    e.target.value = ""; // permite re-seleccionar el mismo archivo
   };
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {/* Botón de icono con tooltip */}
-      <IconButton label="Fondo (cargar imagen)" onClick={openPicker} size={42}>
-        {/* Puedes usar emoji o SVG; aquí emoji por rapidez */}
-        🖼️
-      </IconButton>
+  const base = {
+    height: 36,
+    minWidth: 36,
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: "0 10px",
+    background: "#fff",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+    cursor: "pointer",
+  };
+  const icon = { ...base, width: 36, padding: 0 };
+  const row = { display: "flex", alignItems: "center", gap: 8, height: 36 };
 
-      {/* Input oculto */}
+  return (
+    <div style={compact ? row : undefined}>
       <input
         ref={inputRef}
         type="file"
         accept="image/*"
-        onChange={handleChange}
+        onChange={onFile}
         style={{ display: "none" }}
       />
-
-      {/* Controles compactos */}
-      <label style={{ fontSize: 12, display: "grid", gap: 6 }}>
-        Ajuste
-        <select
-          value={fit}
-          onChange={(e) => onChangeFit(e.target.value)}
-          style={{ width: "100%" }}
-        >
-          <option value="contain">Encajar</option>
-          <option value="cover">Cubrir</option>
-          <option value="100% 100%">Estirar</option>
-        </select>
-      </label>
-
       <button
-        onClick={onClear}
-        disabled={!hasBackground}
-        style={{ fontSize: 12 }}
+        type="button"
+        onClick={openPicker}
+        style={compact ? icon : undefined}
+        title="Fondo…"
       >
-        Quitar fondo
+        🖼️
       </button>
+
+      <select
+        value={fit}
+        onChange={(e) => onChangeFit(e.target.value)}
+        style={compact ? base : undefined}
+        title="Ajuste del fondo"
+      >
+        <option value="contain">Encajar</option>
+        <option value="cover">Cubrir</option>
+        <option value="100% 100%">Estirar</option>
+      </select>
+
+      {hasBackground && (
+        <button
+          type="button"
+          onClick={onClear}
+          style={compact ? base : undefined}
+        >
+          Quitar fondo
+        </button>
+      )}
     </div>
   );
 }

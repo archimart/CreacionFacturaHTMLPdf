@@ -1,0 +1,25 @@
+export const CTRL = {
+  base: {
+    height: 36,
+    minWidth: 36,
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: "0 10px",
+    background: "#fff",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+    cursor: "pointer",
+  },
+  icon: { width: 36, padding: 0 },
+  row: { display: "flex", alignItems: "center", gap: 8, height: 36 },
+  tip: {
+    color: "#64748b",
+    fontSize: 14,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: 420,
+  },
+};

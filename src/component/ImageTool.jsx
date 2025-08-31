@@ -1,38 +1,49 @@
-import { useRef } from "react";
-import IconButton from "./IconButton";
+import React, { useRef } from "react";
 
-export default function ImageTool({ onPickForPlacement }) {
+export default function ImageTool({ onPickForPlacement, compact = true }) {
   const inputRef = useRef(null);
 
   const openPicker = () => inputRef.current?.click();
 
-  const handleChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) onPickForPlacement(file);
-    e.target.value = ""; // permite escoger el mismo archivo de nuevo
+  const onFile = (e) => {
+    const f = e.target.files?.[0];
+    if (f) onPickForPlacement(f);
+    e.target.value = "";
   };
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <IconButton
-        label="Agregar imagen (clic y coloca)"
-        onClick={openPicker}
-        size={42}
-      >
-        🖼️
-      </IconButton>
+  const base = {
+    height: 36,
+    minWidth: 36,
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: "0 10px",
+    background: "#fff",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+    cursor: "pointer",
+  };
+  const icon = { ...base, width: 36, padding: 0 };
+  const row = { display: "flex", alignItems: "center", gap: 8, height: 36 };
 
+  return (
+    <div style={compact ? row : undefined}>
       <input
         ref={inputRef}
         type="file"
         accept="image/*"
-        onChange={handleChange}
+        onChange={onFile}
         style={{ display: "none" }}
       />
-
-      <small style={{ color: "#6b7280", lineHeight: 1.2 }}>
-        Tip: también puedes arrastrar una imagen y soltarla sobre la hoja.
-      </small>
+      <button
+        type="button"
+        onClick={openPicker}
+        style={compact ? icon : undefined}
+        title="Insertar imagen"
+      >
+        🖼️+
+      </button>
     </div>
   );
 }
