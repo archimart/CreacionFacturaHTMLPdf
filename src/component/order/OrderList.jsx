@@ -1,5 +1,3 @@
-import React, { useMemo, useState } from "react";
-
 /**
  * Lista de orden genérica con DnD.
  * props:
@@ -8,6 +6,8 @@ import React, { useMemo, useState } from "react";
  * - getIcon(item), getLabel(item), onRename(id, label)
  * - exclude?(item) => boolean
  */
+import { useMemo, useState } from "react";
+
 export default function OrderList({
   items = [],
   selectedId,
@@ -18,28 +18,34 @@ export default function OrderList({
   onRename,
   exclude,
 }) {
-  const [dragOverIndex, setDragOverIndex] = useState(null);
-
-  const view = useMemo(() => {
-    const src = exclude ? items.filter((it) => !exclude(it)) : items;
-    return src.map((el) => ({ el, realIndex: items.indexOf(el) })).reverse();
+  // Lista visual: solo raíces (sin parentId) y en el orden que ve el usuario: z alto arriba
+  const rootsUI = useMemo(() => {
+    let src = exclude ? items.filter((it) => !exclude(it)) : items;
+    src = src.filter((it) => !it.parentId); // ← solo raíces
+    return src.slice().sort((a, b) => (b.z ?? 0) - (a.z ?? 0)); // ← por z desc
   }, [items, exclude]);
 
-  const dragStart = (realIndex) => (e) => {
-    e.dataTransfer.setData("text/plain", String(realIndex));
+  const [dragIdx, setDragIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
+
+  const onDragStart = (idx) => (e) => {
+    setDragIdx(idx);
+    e.dataTransfer.setData("text/plain", String(idx)); // por si el browser lo usa
     e.dataTransfer.effectAllowed = "move";
   };
-  const dragOver = (realIndex) => (e) => {
+  const onDragOver = (idx) => (e) => {
     e.preventDefault();
-    setDragOverIndex(realIndex);
+    setOverIdx(idx);
   };
-  const drop = (targetRealIndex) => (e) => {
+  const onDrop = (idx) => (e) => {
     e.preventDefault();
-    const from = Number(e.dataTransfer.getData("text/plain"));
-    if (Number.isInteger(from) && from !== targetRealIndex)
-      onReorder?.(from, targetRealIndex);
-    setDragOverIndex(null);
+    const from = dragIdx ?? Number(e.dataTransfer.getData("text/plain"));
+    if (Number.isInteger(from) && from !== idx) onReorder?.(from, idx); // ← índices UI
+    setDragIdx(null);
+    setOverIdx(null);
   };
+
+  const n = rootsUI.length;
 
   return (
     <div
@@ -51,20 +57,24 @@ export default function OrderList({
         overflow: "auto",
       }}
     >
-      {view.map(({ el, realIndex }) => {
+      {rootsUI.map((el, idx) => {
         const selected = selectedId === el.id;
-        const over = dragOverIndex === realIndex;
+        const over = overIdx === idx;
         const icon = getIcon?.(el);
         const label = getLabel?.(el) ?? "";
+        const rank = n - idx; // para mostrar "z 3/3" en el primero
 
         return (
           <div
             key={el.id}
             draggable
-            onDragStart={dragStart(realIndex)}
-            onDragOver={dragOver(realIndex)}
-            onDrop={drop(realIndex)}
-            onDragEnd={() => setDragOverIndex(null)}
+            onDragStart={onDragStart(idx)}
+            onDragOver={onDragOver(idx)}
+            onDrop={onDrop(idx)}
+            onDragEnd={() => {
+              setDragIdx(null);
+              setOverIdx(null);
+            }}
             onClick={() => onSelect?.(el.id)}
             style={{
               width: "100%",
@@ -97,7 +107,7 @@ export default function OrderList({
                 onChange={(e) => onRename?.(el.id, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Backspace" || e.key === "Delete") {
-                    e.stopPropagation(); // evita que llegue al handler global
+                    e.stopPropagation();
                   }
                 }}
                 placeholder="Sin nombre"
@@ -136,12 +146,12 @@ export default function OrderList({
                 alignItems: "center",
               }}
             >
-              z {realIndex + 1}/{items.length}
+              z {rank}/{n}
             </div>
           </div>
         );
       })}
-      {!view.length && (
+      {!n && (
         <div style={{ fontSize: 12, color: "#64748b" }}>
           No hay elementos que mostrar.
         </div>

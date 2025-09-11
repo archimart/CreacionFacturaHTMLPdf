@@ -43,3 +43,17 @@ html, body, #root {
 .read-the-docs {
   color: #888;
 }
+
+.tbl-handle { opacity: 0; transition: opacity .12s ease; }
+
+/* Muéstralo cuando pasas el mouse sobre la tabla
+   o cuando algo dentro tiene foco (edición) */
+.tbl-wrapper:hover .tbl-handle,
+.tbl-wrapper:focus-within .tbl-handle {
+  opacity: 1;
+}
+
+@media print {
+  [data-table-handle],
+  [data-table-resizer] { display: none !important; }
+}

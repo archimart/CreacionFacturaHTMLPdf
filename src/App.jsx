@@ -15,18 +15,9 @@ const MIN_RIGHT = 360;
 const MAX_RIGHT = 840;
 
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+const nextZ = (arr) => arr.reduce((m, e) => Math.max(m, e.z ?? 0), 0) + 1;
 
 /* -------------------- PANEL DE PROPIEDADES -------------------- */
-// Pon este helper cerca de los imports en App.jsx
-const toHex6 = (hex) => {
-  if (!hex) return "#111111";
-  const v = hex.trim();
-  if (/^#([0-9a-fA-F]{3})$/.test(v)) {
-    return "#" + v[1] + v[1] + v[2] + v[2] + v[3] + v[3];
-  }
-  if (/^#([0-9a-fA-F]{6})$/.test(v)) return v.toLowerCase();
-  return "#111111";
-};
 // debajo de addText():
 
 // Reemplaza toda tu función PropertiesPanel por esta:
@@ -475,6 +466,7 @@ function App() {
         y: 80,
         w: 520,
         h: 220,
+        z: nextZ(a),
         table: {
           rows: 3,
           cols: 4,
@@ -540,17 +532,16 @@ function App() {
   // helpers
   const changeEl = (id, patch) => {
     setElements((arr) =>
-      arr.map((el) =>
-        el.id === id
-          ? {
-              ...el,
-              ...patch,
-              style: patch.style
-                ? { ...(el.style || {}), ...patch.style }
-                : el.style,
-            }
-          : el
-      )
+      arr.map((el) => {
+        if (el.id !== id) return el;
+        const { style: stylePatch, table: tablePatch, ...rest } = patch;
+        return {
+          ...el,
+          ...rest,
+          style: stylePatch ? { ...(el.style || {}), ...stylePatch } : el.style,
+          table: tablePatch ? { ...(el.table || {}), ...tablePatch } : el.table,
+        };
+      })
     );
   };
   const delById = (id) => {
@@ -607,6 +598,7 @@ function App() {
         y: 40,
         w: 260,
         h: 80,
+        z: nextZ(a),
         text: "Cuadro",
         style: {
           borderColor: "#2563eb",
@@ -634,6 +626,7 @@ function App() {
         y: 150,
         w: 320,
         h: 40,
+        z: nextZ(a),
         text: "Doble clic y escribe…",
         style: {
           borderWidth: 0,
@@ -647,13 +640,23 @@ function App() {
     ]);
     setSelectedId(id);
   };
-
   const reorder = (from, to) =>
     setElements((arr) => {
-      const copy = arr.slice();
-      const [it] = copy.splice(from, 1);
-      copy.splice(to, 0, it);
-      return copy;
+      const rootsUI = arr
+        .filter((e) => !e.parentId)
+        .slice()
+        .sort((a, b) => (b.z ?? 0) - (a.z ?? 0));
+
+      const ids = rootsUI.map((e) => e.id);
+      const [moved] = ids.splice(from, 1);
+      ids.splice(to, 0, moved);
+
+      const n = ids.length;
+      const zMap = new Map(ids.map((id, idx) => [id, n - 1 - idx])); // 1º → z alto
+
+      return arr.map((e) =>
+        e.parentId ? e : { ...e, z: zMap.get(e.id) ?? e.z ?? 0 }
+      );
     });
 
   const renameEl = (id, label) =>
@@ -666,6 +669,15 @@ function App() {
   const getLabel = (el) =>
     el.label ||
     (el.type === "text" ? "Texto" : el.type === "box" ? "Cuadro" : "Imagen");
+  const getDepth = (id) => {
+    let d = 0;
+    let p = elements.find((e) => e.id === id)?.parentId;
+    while (p) {
+      d++;
+      p = elements.find((e) => e.id === p)?.parentId;
+    }
+    return d;
+  };
 
   // colocar imagen
   const [placingImage, setPlacingImage] = useState(null);
@@ -704,6 +716,7 @@ function App() {
         y: Math.max(0, Math.round(y - h / 2)),
         w,
         h,
+        z: nextZ(arr),
         src: meta.src,
         style: {},
       },
@@ -919,6 +932,7 @@ function App() {
             onRename={renameEl}
             getIcon={getIcon}
             getLabel={getLabel}
+            getDepth={getDepth} // ★ pásalo
           />
         </div>
 

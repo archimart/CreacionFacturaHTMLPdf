@@ -1,5 +1,6 @@
-// src/component/WorkLayer.jsx
-import { useRef, useLayoutEffect, useState, useEffect } from "react";
+// WorkLayer.jsx
+import { useRef, useState, useMemo } from "react";
+import TableRenderer from "./Table/TableRenderer";
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
@@ -13,18 +14,59 @@ export default function WorkLayer({
   onOpenProps,
 }) {
   const layerRef = useRef(null);
-  const [editingId, setEditingId] = useState(null); // edito text/box
-  const [editingCell, setEditingCell] = useState(null); // {id,r,c} para tabla
+  const [editingId, setEditingId] = useState(null);
 
+  const [editingCell, setEditingCell] = useState(null);
+  const [draggingId, setDraggingId] = useState(null); // ID que estoy arrastrando
+  const [hoverContainerId, setHoverContainerId] = useState(null); // box candidato
+  const byZ = (a, b) => (a.z ?? 0) - (b.z ?? 0);
+  // ★ mapa por id para cálculos rápidos
+  const byId = useMemo(() => {
+    const m = new Map();
+    for (const e of elements) m.set(e.id, e);
+    return m;
+  }, [elements]);
+
+  // ★ un "box" será contenedor (puedes añadir "table" si quieres)
+  const isContainer = (el) => el?.type === "box" || el?.type === "table";
+
+  const getAbsRect = (el) => {
+    if (!el) return { left: 0, top: 0, w: 0, h: 0 };
+    let left = el.x ?? 0,
+      top = el.y ?? 0;
+    let p = el.parentId ? byId.get(el.parentId) : null;
+    while (p) {
+      left += p.x ?? 0;
+      top += p.y ?? 0;
+      p = p.parentId ? byId.get(p.parentId) : null;
+    }
+    return { left, top, w: el.w ?? 10, h: el.h ?? 10 };
+  };
+
+  const pointInRect = (x, y, r) =>
+    x >= r.left && x <= r.left + r.w && y >= r.top && y <= r.top + r.h;
+
+  const isDescendant = (childId, parentId) => {
+    let p = byId.get(childId)?.parentId;
+    while (p) {
+      if (p === parentId) return true;
+      p = byId.get(p)?.parentId;
+    }
+    return false;
+  };
+  // ★ clamp ahora usa el tamaño del contenedor si existe
   const onChangeClamped = (id, patch) => {
-    const el = elements.find((e) => e.id === id);
+    const el = byId.get(id);
     const host = layerRef.current;
     if (!el || !host) {
       onChange(id, patch);
       return;
     }
-    const bw = host.clientWidth;
-    const bh = host.clientHeight;
+
+    // límites: capa o padre
+    const parent = el.parentId ? byId.get(el.parentId) : null;
+    const boundW = parent ? parent.w ?? host.clientWidth : host.clientWidth;
+    const boundH = parent ? parent.h ?? host.clientHeight : host.clientHeight;
 
     const x0 = el.x ?? 0,
       y0 = el.y ?? 0;
@@ -36,12 +78,12 @@ export default function WorkLayer({
     const wTry = patch.w !== undefined ? patch.w : w0;
     const hTry = patch.h !== undefined ? patch.h : h0;
 
-    let w = clamp(wTry, 10, bw);
-    let h = clamp(hTry, 10, bh);
-    let x = clamp(xTry, 0, Math.max(0, bw - w));
-    let y = clamp(yTry, 0, Math.max(0, bh - h));
-    w = clamp(w, 10, bw - x);
-    h = clamp(h, 10, bh - y);
+    let w = clamp(wTry, 10, boundW);
+    let h = clamp(hTry, 10, boundH);
+    let x = clamp(xTry, 0, Math.max(0, boundW - w));
+    let y = clamp(yTry, 0, Math.max(0, boundH - h));
+    w = clamp(w, 10, boundW - x);
+    h = clamp(h, 10, boundH - y);
 
     onChange(id, {
       x,
@@ -49,16 +91,20 @@ export default function WorkLayer({
       w,
       h,
       ...(patch.style ? { style: patch.style } : {}),
+      ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
     });
   };
 
+  // ---- drag & drop con adopción por contenedor ----
   const startDrag = (e, el) => {
     if (editingId || editingCell) return;
     e.stopPropagation();
     onSelect?.(el.id);
+    setDraggingId(el.id); // ← empezamos a arrastrar
 
     const startX = e.clientX,
       startY = e.clientY;
+    const startAbs = getAbsRect(el);
     const sx = el.x ?? 0,
       sy = el.y ?? 0;
 
@@ -66,11 +112,67 @@ export default function WorkLayer({
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       onChangeClamped(el.id, { x: sx + dx, y: sy + dy });
+
+      // ← detectar contenedor candidato y dibujar highlight
+      const host = layerRef.current;
+      const hostRect = host.getBoundingClientRect();
+      const mx = ev.clientX - hostRect.left;
+      const my = ev.clientY - hostRect.top;
+
+      let candidate = null;
+      for (let i = elements.length - 1; i >= 0; i--) {
+        const cand = elements[i];
+        if (!isContainer(cand)) continue;
+        if (cand.id === el.id) continue;
+        if (isDescendant(cand.id, el.id)) continue; // evitar ciclos
+        const R = getAbsRect(cand);
+        if (pointInRect(mx, my, R)) {
+          candidate = cand;
+          break;
+        }
+      }
+      setHoverContainerId(candidate?.id ?? null);
     };
-    const onUp = () => {
+
+    const onUp = (ev) => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+
+      // posición absoluta final
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      const finalAbsLeft = startAbs.left + dx;
+      const finalAbsTop = startAbs.top + dy;
+
+      // target final (el que quedó highlight)
+      const targetId = hoverContainerId;
+      setDraggingId(null); // ← limpiar estados
+      setHoverContainerId(null);
+
+      if (targetId) {
+        const target = byId.get(targetId);
+        const PR = getAbsRect(target);
+        const relX = clamp(
+          finalAbsLeft - PR.left,
+          0,
+          (target.w ?? 10) - (el.w ?? 10)
+        );
+        const relY = clamp(
+          finalAbsTop - PR.top,
+          0,
+          (target.h ?? 10) - (el.h ?? 10)
+        );
+        onChange(el.id, { x: relX, y: relY, parentId: target.id });
+      } else if (el.parentId) {
+        // soltar a raíz: pasar a coords absolutas
+        onChange(el.id, {
+          x: finalAbsLeft,
+          y: finalAbsTop,
+          parentId: undefined,
+        });
+      }
     };
+
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
@@ -114,48 +216,10 @@ export default function WorkLayer({
     if (!editingId && !editingCell) onSelect?.(null);
   };
 
-  useLayoutEffect(() => {
-    const host = layerRef.current;
-    if (!host) return;
-
-    const apply = () => {
-      const bw = host.clientWidth;
-      const bh = host.clientHeight;
-      elements.forEach((el) => {
-        const x = clamp(el.x ?? 0, 0, Math.max(0, bw - (el.w ?? 10)));
-        const y = clamp(el.y ?? 0, 0, Math.max(0, bh - (el.h ?? 10)));
-        const w = clamp(el.w ?? 10, 10, bw - x);
-        const h = clamp(el.h ?? 10, 10, bh - y);
-        if (x !== el.x || y !== el.y || w !== el.w || h !== el.h) {
-          onChange(el.id, { x, y, w, h });
-        }
-      });
-    };
-    apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(host);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements]);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") {
-        setEditingId(null);
-        setEditingCell(null);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // -------- helpers tabla --------
-  const ensureMatrix = (rows, cols, data = []) => {
-    const out = Array.from({ length: rows }, (_, r) =>
+  const ensureMatrix = (rows, cols, data = []) =>
+    Array.from({ length: rows }, (_, r) =>
       Array.from({ length: cols }, (_, c) => data[r]?.[c] ?? "")
     );
-    return out;
-  };
 
   const changeCell = (el, r, c, value) => {
     const t = el.table || { rows: 1, cols: 1, data: [[""]] };
@@ -164,11 +228,327 @@ export default function WorkLayer({
     onChange(el.id, { table: { ...t, data } });
   };
 
-  // -------- render --------
+  // ---------- RENDER RECURSIVO (padres → hijos) ----------
+  const renderNode = (el) => {
+    const isSel = el.id === selectedId;
+    const isTbl = el.type === "table";
+    const isImg = el.type === "image";
+    const isEditing = editingId === el.id;
+    const s = el.style || {};
+    const isDropTarget =
+      isContainer(el) &&
+      hoverContainerId === el.id &&
+      draggingId &&
+      draggingId !== el.id &&
+      !isDescendant(el.id, draggingId);
+    const frame = {
+      position: "absolute",
+      left: el.x ?? 0,
+      top: el.y ?? 0,
+      width: el.w ?? 10,
+      height: el.h ?? 10,
+      zIndex: el.z ?? 0, // ★ esto asegura el apilamiento visual
+      outline: isDropTarget ? "2px dashed #2563eb" : "none",
+      outlineOffset: -2,
+    };
+
+    if (isTbl) {
+      return (
+        <div key={el.id} style={frame}>
+          <div
+            className="tbl-wrapper"
+            onMouseDown={(e) => {
+              const insideTable = e.target?.closest?.("table");
+              const forceMove = e.altKey || e.ctrlKey || e.metaKey;
+              if (insideTable && !forceMove) {
+                return;
+              }
+              if (!editingCell) startDrag(e, el);
+            }}
+            onDragStart={(e) => e.preventDefault()}
+            title="Arrastra con ALT/CTRL/⌘ para mover la tabla (o usa el cuadrito azul)"
+            style={{
+              position: "relative",
+              width: "100%",
+              height: "100%",
+              cursor: editingCell ? "text" : "move",
+              background: "transparent",
+              borderRadius: s.borderRadius ?? 6,
+              overflow: "visible",
+            }}
+          >
+            <div
+              style={{
+                position: "relative",
+                width: "100%",
+                height: "100%",
+                overflow: "visible",
+              }}
+            >
+              <TableRenderer
+                el={el}
+                onSelect={onSelect}
+                onOpenProps={onOpenProps}
+                editingCell={editingCell}
+                setEditingCell={setEditingCell}
+                onChangeCell={(r, c, value) => changeCell(el, r, c, value)}
+                onChangeTable={(patch) =>
+                  onChange(el.id, { table: { ...el.table, ...patch } })
+                }
+                onRequestMove={(ev) => startDrag(ev, el)}
+                isSelected={selectedId === el.id} // ← NUEVO
+              />
+            </div>
+            {isSel && !editingCell && (
+              <div
+                className="tbl-handle"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  startDrag(e, el);
+                }}
+                title="Mover tabla"
+                style={{
+                  position: "absolute",
+                  left: 6,
+                  top: 6,
+                  width: 14,
+                  height: 14,
+                  borderRadius: 4,
+                  background: "rgba(37,99,235,0.95)",
+                  cursor: "move",
+                  boxShadow: "0 0 0 2px rgba(255,255,255,0.9)",
+                  zIndex: 10000,
+                }}
+              />
+            )}
+          </div>
+
+          {isSel && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                borderRadius: s.borderRadius ?? 6,
+                boxShadow: "0 0 0 2px #2563eb",
+                pointerEvents: "none",
+              }}
+            />
+          )}
+          {!editingCell && (
+            <div
+              onMouseDown={(e) => startResize(e, el)}
+              title="Redimensionar"
+              style={{
+                position: "absolute",
+                right: -6,
+                bottom: -6,
+                width: 12,
+                height: 12,
+                borderRadius: 6,
+                background: isSel ? "#2563eb" : "transparent",
+                cursor: "nwse-resize",
+              }}
+            />
+          )}
+
+          {elements
+            .filter((ch) => ch.parentId === el.id)
+            .slice()
+            .sort(byZ)
+            .map((ch) => renderNode(ch))}
+        </div>
+      );
+    }
+
+    // IMG / TEXT / BOX
+    const dragArea = {
+      width: "100%",
+      height: "100%",
+      boxSizing: "border-box",
+      cursor: isEditing || editingCell ? "text" : "move",
+      display: "flex",
+      alignItems:
+        (s.vAlign ?? "top") === "middle"
+          ? "center"
+          : (s.vAlign ?? "top") === "bottom"
+          ? "flex-end"
+          : "flex-start",
+      justifyContent:
+        (s.textAlign ?? "left") === "center"
+          ? "center"
+          : (s.textAlign ?? "left") === "right"
+          ? "flex-end"
+          : (s.textAlign ?? "left") === "justify"
+          ? "stretch"
+          : "flex-start",
+      background: "transparent",
+      padding: 0,
+      position: "relative",
+      overflow: isContainer(el) ? "hidden" : "visible",
+      borderRadius: isContainer(el) ? s.borderRadius ?? 10 : undefined,
+    };
+
+    const textBase = {
+      color: s.color ?? "#111",
+      fontSize: s.fontSize ?? (el.type === "text" ? 18 : 14),
+      fontFamily: s.fontFamily,
+      fontWeight: s.fontWeight,
+      fontStyle: s.fontStyle,
+      lineHeight: 1.35,
+      textAlign:
+        (s.textAlign ?? "left") === "justify"
+          ? "justify"
+          : s.textAlign ?? "left",
+    };
+
+    return (
+      <div key={el.id} style={frame}>
+        <div
+          onMouseDown={(e) => !isEditing && !editingCell && startDrag(e, el)}
+          style={dragArea}
+        >
+          {isImg && (
+            <img
+              src={el.src}
+              alt=""
+              draggable={false}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: s.fit ?? "contain",
+                objectPosition: s.objectPosition ?? "center",
+                display: "block",
+                pointerEvents: "none",
+              }}
+            />
+          )}
+
+          {isImg ? null : el.type === "text" ? (
+            <div
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onOpenProps?.(el.id);
+              }}
+              style={{
+                position: "relative",
+                width: "100%",
+                height: "100%",
+                padding: 8,
+                backgroundColor: s.background ?? "transparent",
+                color: textBase.color,
+                fontSize: textBase.fontSize,
+                fontFamily: textBase.fontFamily,
+                fontWeight: textBase.fontWeight,
+                fontStyle: textBase.fontStyle,
+                lineHeight: textBase.lineHeight,
+                textAlign: textBase.textAlign,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                overflowWrap: "anywhere",
+                backgroundImage: s.backgroundImageUrl
+                  ? `url(${s.backgroundImageUrl})`
+                  : undefined,
+                backgroundSize: s.backgroundImageFit ?? "contain",
+                backgroundPosition: "center",
+                backgroundRepeat: "no-repeat",
+              }}
+            >
+              {el.text ?? "Doble clic y escribe…"}
+            </div>
+          ) : el.type === "box" ? (
+            <div
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onOpenProps?.(el.id);
+              }}
+              style={{
+                position: "relative",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                boxSizing: "border-box",
+                padding: 8,
+                background: s.background ?? "#fff",
+                border: `${Number(s.borderWidth ?? 1)}px solid ${
+                  s.borderColor ?? "#94a3b8"
+                }`,
+                borderRadius: Number(s.borderRadius ?? 10),
+                color: textBase.color,
+                fontSize: textBase.fontSize,
+                fontFamily: textBase.fontFamily,
+                fontWeight: textBase.fontWeight,
+                fontStyle: textBase.fontStyle,
+                lineHeight: textBase.lineHeight,
+                textAlign: textBase.textAlign,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                overflowWrap: "anywhere",
+                backgroundImage: s.backgroundImageUrl
+                  ? `url(${s.backgroundImageUrl})`
+                  : undefined,
+                backgroundSize: s.backgroundImageFit ?? "contain",
+                backgroundPosition: "center",
+                backgroundRepeat: "no-repeat",
+                zIndex: 10,
+              }}
+            >
+              {el.text ?? "Cuadro"}
+            </div>
+          ) : null}
+
+          {/* hijos dentro del contenedor (para box) */}
+          {elements
+            .filter((ch) => ch.parentId === el.id)
+            .map((ch) => renderNode(ch))}
+        </div>
+
+        {isSel && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: el.type === "image" ? s.borderRadius ?? 0 : 10,
+              boxShadow: "0 0 0 2px #2563eb",
+              pointerEvents: "none",
+            }}
+          />
+        )}
+
+        {!isEditing && !editingCell && (
+          <div
+            onMouseDown={(e) => startResize(e, el)}
+            title="Redimensionar"
+            style={{
+              position: "absolute",
+              right: -6,
+              bottom: -6,
+              width: 12,
+              height: 12,
+              borderRadius: 6,
+              background: selectedId === el.id ? "#2563eb" : "transparent",
+              cursor: "nwse-resize",
+            }}
+          />
+        )}
+      </div>
+    );
+  };
+
+  // ★ solo renderizamos raíces; los hijos los pinta cada padre
+  const roots = useMemo(() => elements.filter((e) => !e.parentId), [elements]);
   return (
     <div
       ref={layerRef}
-      onMouseDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => {
+        const tag = (e.target?.tagName || "").toUpperCase();
+        if (
+          tag !== "TEXTAREA" &&
+          tag !== "INPUT" &&
+          !e.target?.isContentEditable
+        ) {
+          e.stopPropagation();
+        }
+      }}
       onClick={handleAreaClick}
       style={{
         position: "relative",
@@ -180,327 +560,7 @@ export default function WorkLayer({
       }}
       data-layer="work"
     >
-      {elements.map((el) => {
-        const isSel = el.id === selectedId;
-        const isImg = el.type === "image";
-        const isTbl = el.type === "table";
-        const isEditing = editingId === el.id;
-        const s = el.style || {};
-
-        const beginEdit = (e) => {
-          e.stopPropagation();
-          if (el.type === "text" || el.type === "box") {
-            setEditingId(el.id);
-            onSelect?.(el.id);
-            onOpenProps?.(el.id);
-          }
-        };
-
-        const frame = {
-          position: "absolute",
-          left: el.x ?? 0,
-          top: el.y ?? 0,
-          width: el.w ?? 10,
-          height: el.h ?? 10,
-        };
-
-        const dragArea = {
-          width: "100%",
-          height: "100%",
-          boxSizing: "border-box",
-          cursor: isEditing || editingCell ? "text" : "move",
-          display: "flex",
-          alignItems:
-            (s.vAlign ?? "top") === "middle"
-              ? "center"
-              : (s.vAlign ?? "top") === "bottom"
-              ? "flex-end"
-              : "flex-start",
-          justifyContent:
-            (s.textAlign ?? "left") === "center"
-              ? "center"
-              : (s.textAlign ?? "left") === "right"
-              ? "flex-end"
-              : (s.textAlign ?? "left") === "justify"
-              ? "stretch"
-              : "flex-start",
-
-          background:
-            el.type === "box" || isTbl ? s.background ?? "#fff" : "transparent",
-          border:
-            el.type === "box" || isTbl
-              ? `${s.borderWidth ?? 1}px solid ${s.borderColor ?? "#94a3b8"}`
-              : "none",
-          borderRadius:
-            el.type === "box"
-              ? s.borderRadius ?? 10
-              : el.type === "image"
-              ? s.borderRadius ?? 0
-              : isTbl
-              ? s.borderRadius ?? 6
-              : 0,
-
-          opacity: s.opacity ?? 1,
-          overflow:
-            el.type === "image"
-              ? (s.borderRadius ?? 0) > 0
-                ? "hidden"
-                : "visible"
-              : "hidden",
-
-          padding: el.type === "text" ? "4px 6px" : 0,
-        };
-
-        const textBase = {
-          color: s.color ?? "#111",
-          fontSize: s.fontSize ?? (el.type === "text" ? 18 : 14),
-          fontFamily: s.fontFamily,
-          fontWeight: s.fontWeight,
-          fontStyle: s.fontStyle,
-          lineHeight: 1.35,
-          textAlign:
-            (s.textAlign ?? "left") === "justify"
-              ? "justify"
-              : s.textAlign ?? "left",
-        };
-
-        // --- render por tipo ---
-        return (
-          <div key={el.id} style={frame}>
-            <div
-              onMouseDown={(e) =>
-                !isEditing && !editingCell && startDrag(e, el)
-              }
-              style={dragArea}
-            >
-              {/* Imagen */}
-              {isImg && (
-                <img
-                  src={el.src}
-                  alt=""
-                  draggable={false}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: s.fit ?? "contain",
-                    objectPosition: s.objectPosition ?? "center",
-                    display: "block",
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-
-              {/* Texto / Cuadro */}
-              {(el.type === "box" || el.type === "text") && !isEditing && (
-                <div
-                  onDoubleClick={beginEdit}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    userSelect: "none",
-                    ...textBase,
-                  }}
-                >
-                  {el.text ?? (el.type === "box" ? "Cuadro" : "Texto")}
-                </div>
-              )}
-              {(el.type === "box" || el.type === "text") && isEditing && (
-                <textarea
-                  autoFocus
-                  value={el.text ?? ""}
-                  onChange={(ev) => onChange(el.id, { text: ev.target.value })}
-                  onBlur={() => setEditingId(null)}
-                  onKeyDown={(ev) => {
-                    if (ev.key === "Enter" || ev.key === "Escape") {
-                      ev.preventDefault();
-                      ev.currentTarget.blur();
-                    }
-                  }}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    boxSizing: "border-box",
-                    resize: "none",
-                    border: "1px solid #2563eb",
-                    outline: "none",
-                    background: "transparent",
-                    padding: "4px 6px",
-                    userSelect: "text",
-                    ...textBase,
-                  }}
-                />
-              )}
-
-              {/* Tabla */}
-              {isTbl &&
-                (() => {
-                  const t = el.table || {
-                    rows: 2,
-                    cols: 2,
-                    data: [
-                      ["", ""],
-                      ["", ""],
-                    ],
-                    header: false,
-                  };
-                  const pad = Number(s.cellPadding ?? 6);
-                  const matrix = ensureMatrix(t.rows, t.cols, t.data);
-
-                  return (
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: `repeat(${t.cols}, 1fr)`,
-                        gridAutoRows: "minmax(24px, auto)",
-                        width: "100%",
-                        height: "100%",
-                        gap: 0,
-                        borderRadius: s.borderRadius ?? 6,
-                        overflow:
-                          (s.borderRadius ?? 0) > 0 ? "hidden" : "visible",
-                      }}
-                    >
-                      {matrix.map((row, r) =>
-                        row.map((val, c) => {
-                          const isHeader = !!t.header && r === 0;
-                          const editingThis =
-                            editingCell &&
-                            editingCell.id === el.id &&
-                            editingCell.r === r &&
-                            editingCell.c === c;
-
-                          const cellInner = (
-                            <div
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                setEditingCell({ id: el.id, r, c });
-                                onSelect?.(el.id);
-                                onOpenProps?.(el.id);
-                              }}
-                              style={{
-                                display: "flex",
-                                alignItems:
-                                  (s.vAlign ?? "top") === "middle"
-                                    ? "center"
-                                    : (s.vAlign ?? "top") === "bottom"
-                                    ? "flex-end"
-                                    : "flex-start",
-                                justifyContent:
-                                  (s.textAlign ?? "left") === "center"
-                                    ? "center"
-                                    : (s.textAlign ?? "left") === "right"
-                                    ? "flex-end"
-                                    : (s.textAlign ?? "left") === "justify"
-                                    ? "stretch"
-                                    : "flex-start",
-                                padding: pad,
-                                borderRight: `${s.borderWidth ?? 1}px solid ${
-                                  s.borderColor ?? "#94a3b8"
-                                }`,
-                                borderBottom: `${s.borderWidth ?? 1}px solid ${
-                                  s.borderColor ?? "#94a3b8"
-                                }`,
-                                background: isHeader
-                                  ? s.headerBg ?? "#f1f5f9"
-                                  : s.altRowBg && r % 2 === 1
-                                  ? s.altRowBg
-                                  : "transparent",
-                                ...textBase,
-                                fontWeight: isHeader
-                                  ? "700"
-                                  : textBase.fontWeight,
-                              }}
-                            >
-                              <div style={{ width: "100%" }}>{val}</div>
-                            </div>
-                          );
-
-                          return (
-                            <div
-                              key={`${r}-${c}`}
-                              style={{ position: "relative" }}
-                            >
-                              {editingThis ? (
-                                <textarea
-                                  autoFocus
-                                  value={val}
-                                  onChange={(ev) =>
-                                    changeCell(el, r, c, ev.target.value)
-                                  }
-                                  onBlur={() => setEditingCell(null)}
-                                  onKeyDown={(ev) => {
-                                    if (
-                                      ev.key === "Enter" ||
-                                      ev.key === "Escape"
-                                    ) {
-                                      ev.preventDefault();
-                                      ev.currentTarget.blur();
-                                    }
-                                  }}
-                                  style={{
-                                    position: "absolute",
-                                    inset: 0,
-                                    boxSizing: "border-box",
-                                    border: "1px solid #2563eb",
-                                    outline: "none",
-                                    background: "rgba(255,255,255,0.9)",
-                                    padding: pad,
-                                    resize: "none",
-                                    ...textBase,
-                                  }}
-                                />
-                              ) : (
-                                cellInner
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  );
-                })()}
-            </div>
-
-            {/* Marco de selección que respeta el borderRadius */}
-            {isSel && (
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  borderRadius:
-                    el.type === "box"
-                      ? s.borderRadius ?? 10
-                      : el.type === "image"
-                      ? s.borderRadius ?? 0
-                      : isTbl
-                      ? s.borderRadius ?? 6
-                      : 0,
-                  boxShadow: "0 0 0 2px #2563eb",
-                  pointerEvents: "none",
-                }}
-              />
-            )}
-
-            {/* Manija de resize */}
-            {!isEditing && !editingCell && (
-              <div
-                onMouseDown={(e) => startResize(e, el)}
-                title="Redimensionar"
-                style={{
-                  position: "absolute",
-                  right: -6,
-                  bottom: -6,
-                  width: 12,
-                  height: 12,
-                  borderRadius: 6,
-                  background: isSel ? "#2563eb" : "transparent",
-                  cursor: "nwse-resize",
-                }}
-              />
-            )}
-          </div>
-        );
-      })}
+      {roots.map((el) => renderNode(el))}
     </div>
   );
 }

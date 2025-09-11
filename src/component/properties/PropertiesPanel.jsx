@@ -6,8 +6,7 @@ export default function PropertiesPanel({ el, onRename, onChange, onStyle }) {
   const isBox = el.type === "box";
   const isText = el.type === "text";
   const isImage = el.type === "image";
-
-  // Para texto mostramos controles en box y en text
+  const isTable = el.type === "table";
   const canText = isText || isBox;
 
   const fonts = [
@@ -41,11 +40,10 @@ export default function PropertiesPanel({ el, onRename, onChange, onStyle }) {
         placeholder={isText ? "Texto" : isBox ? "Cuadro" : "Imagen"}
       />
 
-      {/* ======== PROPIEDADES DE IMAGEN ======== */}
+      {/* Imagen */}
       {isImage && (
         <>
           <div style={{ fontWeight: 700, marginTop: 6 }}>Imagen</div>
-
           <label style={{ fontSize: 12, color: "#475569" }}>Encaje</label>
           <select
             value={s.fit ?? "contain"}
@@ -125,7 +123,7 @@ export default function PropertiesPanel({ el, onRename, onChange, onStyle }) {
         </>
       )}
 
-      {/* ======== PROPIEDADES DE TEXTO (para box y text) ======== */}
+      {/* Texto (para box y text) */}
       {canText && (
         <>
           <div style={{ fontWeight: 700, marginTop: 6 }}>Texto</div>
@@ -281,11 +279,10 @@ export default function PropertiesPanel({ el, onRename, onChange, onStyle }) {
         </>
       )}
 
-      {/* ======== PROPIEDADES DE CAJA ======== */}
+      {/* Caja */}
       {isBox && (
         <>
           <div style={{ fontWeight: 700, marginTop: 6 }}>Caja</div>
-
           <label style={{ fontSize: 12, color: "#475569" }}>Fondo</label>
           <input
             type="color"
@@ -338,6 +335,217 @@ export default function PropertiesPanel({ el, onRename, onChange, onStyle }) {
               }
               style={inputStyle}
             />
+          </div>
+          {/* === Imagen de fondo (BOX) === */}
+          <label style={{ fontSize: 12, color: "#475569" }}>
+            Imagen de fondo
+          </label>
+          {el.style?.backgroundImageUrl ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              <img
+                src={el.style.backgroundImageUrl}
+                alt=""
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: 140,
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                  objectFit: "contain",
+                }}
+              />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 8,
+                }}
+              >
+                <select
+                  value={el.style.backgroundImageFit ?? "contain"}
+                  onChange={(e) =>
+                    onStyle?.({
+                      ...(el.style || {}),
+                      backgroundImageFit: e.target.value,
+                    })
+                  }
+                >
+                  <option value="contain">Contain</option>
+                  <option value="cover">Cover</option>
+                </select>
+                <button
+                  onClick={() =>
+                    onStyle?.({
+                      ...(el.style || {}),
+                      backgroundImageUrl: undefined,
+                      backgroundImageFit: undefined,
+                    })
+                  }
+                  style={{
+                    padding: "6px 8px",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                    background: "#fff",
+                  }}
+                >
+                  Quitar imagen
+                </button>
+              </div>
+            </div>
+          ) : (
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                const url = URL.createObjectURL(f);
+                onStyle?.({
+                  ...(el.style || {}),
+                  backgroundImageUrl: url,
+                  backgroundImageFit: "contain",
+                });
+              }}
+            />
+          )}
+
+          {/* Imagen de fondo */}
+          <label style={{ fontSize: 12, color: "#475569" }}>
+            Imagen de fondo
+          </label>
+
+          {el.style?.backgroundImageUrl ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              <img
+                src={el.style.backgroundImageUrl}
+                alt=""
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: 140,
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                  objectFit: "contain",
+                }}
+              />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 8,
+                }}
+              >
+                <select
+                  value={el.style.backgroundImageFit ?? "contain"}
+                  onChange={(e) =>
+                    onStyle?.({
+                      ...(el.style || {}),
+                      backgroundImageFit: e.target.value,
+                    })
+                  }
+                >
+                  <option value="contain">Contain</option>
+                  <option value="cover">Cover</option>
+                </select>
+                <button
+                  onClick={() =>
+                    onStyle?.({
+                      ...(el.style || {}),
+                      backgroundImageUrl: undefined,
+                      backgroundImageFit: undefined,
+                    })
+                  }
+                  style={{
+                    padding: "6px 8px",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                    background: "#fff",
+                  }}
+                >
+                  Quitar imagen
+                </button>
+              </div>
+            </div>
+          ) : (
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                const url = URL.createObjectURL(f);
+                onStyle?.({
+                  ...(el.style || {}),
+                  backgroundImageUrl: url,
+                  backgroundImageFit: "contain",
+                });
+              }}
+            />
+          )}
+        </>
+      )}
+
+      {/* Tabla (alto mínimo y overrides por fila, contando encabezado) */}
+      {isTable && (
+        <>
+          <div style={{ fontWeight: 700, marginTop: 6 }}>Tabla</div>
+
+          <label style={{ fontSize: 12, color: "#475569" }}>
+            Alto mínimo de fila (px)
+          </label>
+          <input
+            type="number"
+            min={10}
+            value={el.style?.rowMinHeight ?? 28}
+            onChange={(e) =>
+              onStyle?.({
+                ...(el.style || {}),
+                rowMinHeight: Math.max(10, Number(e.target.value) || 10),
+              })
+            }
+            style={inputStyle}
+          />
+
+          <label style={{ fontSize: 12, color: "#475569" }}>
+            Altos por fila (overrides)
+          </label>
+          <div style={{ display: "grid", gap: 6 }}>
+            {Array.from({ length: el.table?.rows ?? 0 }).map((_, r) => {
+              const arr = el.table?.rowHeights || [];
+              const v = arr[r] ?? "";
+              const isHeader = !!el.table?.header && r === 0;
+              return (
+                <div
+                  key={`rh-${r}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ fontSize: 12, color: "#64748b" }}>
+                    {isHeader ? `Fila ${r + 1} (encabezado)` : `Fila ${r + 1}`}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder={`${el.style?.rowMinHeight ?? 28}`}
+                    value={v}
+                    onChange={(e) => {
+                      const t = el.table || {};
+                      const rows = t.rows ?? 0;
+                      const next = Array.from(
+                        { length: rows },
+                        (_, i) => t.rowHeights?.[i] ?? ""
+                      );
+                      const nv = Number(e.target.value);
+                      next[r] = Number.isFinite(nv) && nv > 0 ? nv : "";
+                      onChange?.({ table: { ...t, rowHeights: next } });
+                    }}
+                    style={inputStyle}
+                  />
+                </div>
+              );
+            })}
           </div>
         </>
       )}
