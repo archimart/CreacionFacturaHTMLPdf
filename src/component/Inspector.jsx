@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-
+import OrderPanel from "./order/OrderPanel"; // ajusta al nombre real
+import PropertiesPanel from "./properties/PropertiesPanel"; // idem
 /**
  * Inspector genérico por configuración.
  * props:

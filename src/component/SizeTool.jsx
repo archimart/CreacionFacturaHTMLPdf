@@ -28,7 +28,9 @@ export default function SizeTool({
         title="Tamaño de hoja"
       >
         <option value="letter">Carta (8.5×11)</option>
-        <option value="legal">Oficio (8.5×14)</option>
+        <option value="oficio">Oficio / Legal (8.5×13)</option>
+        <option value="legal">Legal US / Oficio L (8.5×14)</option>
+        <option value="oficioMX">Oficio México (8.5×13.4)</option>
         <option value="halfLetter">1/2 Carta (5.5×8.5)</option>
         <option value="a4">A4 (210×297 mm)</option>
         <option value="a5">A5 (148×210 mm)</option>

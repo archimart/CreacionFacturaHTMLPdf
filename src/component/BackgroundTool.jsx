@@ -7,6 +7,7 @@ export default function BackgroundTool({
   fit,
   onChangeFit,
   compact = true,
+  disabled = false,
 }) {
   const inputRef = useRef(null);
 
@@ -45,8 +46,9 @@ export default function BackgroundTool({
       />
       <button
         type="button"
+        disabled={disabled}
         onClick={openPicker}
-        style={compact ? icon : undefined}
+        style={{ ... (compact ? icon : {}), opacity: disabled ? 0.5 : 1, cursor: disabled ? "not-allowed" : "pointer" }}
         title="Fondo…"
       >
         🖼️
@@ -54,8 +56,9 @@ export default function BackgroundTool({
 
       <select
         value={fit}
+        disabled={disabled}
         onChange={(e) => onChangeFit(e.target.value)}
-        style={compact ? base : undefined}
+        style={{ ... (compact ? base : {}), opacity: disabled ? 0.5 : 1, cursor: disabled ? "not-allowed" : "pointer" }}
         title="Ajuste del fondo"
       >
         <option value="contain">Encajar</option>
@@ -66,8 +69,9 @@ export default function BackgroundTool({
       {hasBackground && (
         <button
           type="button"
+          disabled={disabled}
           onClick={onClear}
-          style={compact ? base : undefined}
+          style={{ ... (compact ? base : {}), opacity: disabled ? 0.5 : 1, cursor: disabled ? "not-allowed" : "pointer" }}
         >
           Quitar fondo
         </button>
