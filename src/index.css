@@ -4,7 +4,6 @@
   font-weight: 400;
   color-scheme: light;
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   --work-bg: #f5f6f8;
@@ -54,12 +53,13 @@ body {
 }
 
 /* Reset margin/padding for browser-generated blocks */
-.content-editable-area div, .content-editable-area p {
-  margin: 0;
-  padding: 0;
-  min-height: 1.2em;
-  word-break: break-word;
-  white-space: pre-wrap;
+.content-editable-area *, .content-editable-area div, .content-editable-area p, .content-editable-area li {
+  line-height: 1.4 !important;
+  word-break: break-word !important;
+  white-space: pre-wrap !important;
+  letter-spacing: normal !important;
+  word-spacing: normal !important;
+  text-rendering: auto !important;
 }
 
 /* Modern smooth rendering for all elements */

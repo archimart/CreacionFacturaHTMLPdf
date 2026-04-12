@@ -27,15 +27,15 @@ const PaperCanvas = forwardRef(function PaperCanvas(
     position: "relative",
     width: `${sheetW}px`,
     height: `${sheetH}px`,
-    backgroundColor: !isUrl ? background || "#ffffff" : "#ffffff",
+    backgroundColor: "#ffffff",
     backgroundImage: isUrl ? `url(${background})` : "none",
     backgroundSize: style?.backgroundSize || "contain",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",
-    boxShadow: "0 10px 40px -5px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.05)",
-    borderRadius: 8,
+    boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 10px 20px -5px rgba(0, 0, 0, 0.15)",
+    borderRadius: 4,
     overflow: "visible", // Ver el sangrado (bleed)
-    border: "1px solid #cbd5e1", // Guía de papel suave 
+    border: "1px solid #94a3b8", // Borde sólido más visible 
     boxSizing: "border-box", // CRITICO: El borde ya no suma al tamaño
     padding,
     transform: `scale(${zoom})`,

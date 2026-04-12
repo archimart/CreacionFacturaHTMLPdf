@@ -30,7 +30,8 @@ function App() {
         <WorkflowCanvas initialInvoiceData={currentInvoiceData} />
         
         <style dangerouslySetInnerHTML={{ __html: `
-          .app-container { width: 100vw; height: 100vh; overflow: hidden; font-family: 'Inter', sans-serif; }
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Outfit:wght@400;600;700;900&family=Roboto:wght@400;700&family=Playfair+Display:wght@400;700&family=Montserrat:wght@400;700&display=swap');
+          .app-container { width: 100vw; height: 100vh; overflow: hidden; font-family: 'Outfit', sans-serif; }
           .hover-node-add:hover { opacity: 1 !important; transform: translateY(-2px); transition: all 0.2s; }
         `}} />
     </div>

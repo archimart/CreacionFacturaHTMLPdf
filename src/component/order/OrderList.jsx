@@ -44,28 +44,6 @@ export default function OrderList({
       .reverse(); 
   }, [filtered]);
 
-  // Hijos por parentId (filas de tabla, etc.)
-  const childrenByParent = useMemo(() => {
-    const map = new Map();
-    for (const it of filtered) {
-      if (!it.parentId) continue;
-      if (!map.has(it.parentId)) map.set(it.parentId, []);
-      map.get(it.parentId).push(it);
-    }
-    // ordenar filas por meta.rowIndex si existe
-    for (const [pid, arr] of map) {
-      arr.sort((a, b) => {
-        const ai = a.meta?.rowIndex;
-        const bi = b.meta?.rowIndex;
-        const bothRows = a.type === "table-row" && b.type === "table-row";
-        if (bothRows && Number.isFinite(ai) && Number.isFinite(bi))
-          return ai - bi;
-        return 0; // mantener orden del array si no tienen row index
-      });
-    }
-    return map;
-  }, [filtered]);
-
   // DnD Capas
   const [dragIdx, setDragIdx] = useState(null);
   const [overIdx, setOverIdx] = useState(null);
@@ -134,15 +112,11 @@ export default function OrderList({
       ? "T"
       : it.type === "box"
       ? "▢"
-      : it.type === "table-row"
-      ? "↳"
       : "•");
 
   const labelOf = (it) =>
     getLabel?.(it) ??
-    (it.type === "table-row"
-      ? `Fila ${Number(it.meta?.rowIndex ?? 0) + 1}`
-      : it.name || it.type || it.id);
+    (it.name || it.type || it.id);
 
   return (
     <div
@@ -155,7 +129,6 @@ export default function OrderList({
       }}
     >
       {pages.map((p, pIdx) => {
-          // Filtrar elementos de esta página
           const pageItems = rootsUI.filter(it => it.pageId === p.id);
 
           return (
@@ -192,6 +165,7 @@ export default function OrderList({
                         />
                     </div>
                 </div>
+
                 {pageItems.map((el) => {
                     const idxInRoots = rootsUI.indexOf(el);
                     const selected = selectedId === el.id;
@@ -225,7 +199,6 @@ export default function OrderList({
                                 }}
                             >
                                 <div style={{ width: 14, color: '#94a3b8' }}>☰</div>
-                                
                                 {el.type === 'table' && (
                                     <button 
                                       onClick={(e) => { e.stopPropagation(); toggleExpand(el.id); }}
@@ -237,9 +210,7 @@ export default function OrderList({
                                       }}
                                     >▶</button>
                                 )}
-
                                 <div style={{ width: 24, textAlign: "center" }}>{iconOf(el)}</div>
-
                                 <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
                                     <input
                                         value={labelOf(el)}
@@ -254,14 +225,12 @@ export default function OrderList({
                                         {el.w}×{el.h}px
                                     </div>
                                 </div>
-
                                 <div style={{ 
                                     fontSize: 10, fontWeight: 700, color: '#64748b', 
                                     background: '#f1f5f9', padding: '2px 6px', borderRadius: 6
                                 }}>
                                     {rank === n ? 'Frente' : rank === 1 ? 'Fondo' : `Capa ${rank}`}
                                 </div>
-                                
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); onDelete?.(el.id); }}
                                     style={{ 
@@ -272,62 +241,72 @@ export default function OrderList({
                                 >✕</button>
                             </div>
 
-                            {/* Hijos Reales (con parentId) e Hijos Virtuales (Celdas) */}
-                            {(!expandedIds.has(el.id) && el.type === 'table') ? null : [
-                                // Hijos directos con parentId
-                                ...(childrenByParent.get(el.id) || []),
-                                // Hijos virtuales (TODAS las celdas de la tabla)
-                                ...(el.type === 'table' ? (el.table?.data || []).flatMap((row, r) => 
-                                    row.map((cell, c) => {
-                                        const hasImage = cell?.includes('<img');
-                                        return {
-                                            id: `${el.id}::cell:${r}:${c}`,
-                                            type: hasImage ? 'image' : (cell ? 'text' : 'cell'),
-                                            label: `Celda [F${r+1}:C${c+1}]${cell ? ': ' + (hasImage ? 'Imagen' : cell.substring(0, 15) + (cell.length > 15 ? '...' : '')) : ''}`,
-                                            text: cell,
-                                            _isVirtual: true
-                                        };
-                                    })
-                                ) : [])
-                            ].map(ch => {
-                                const chSelected = selectedId === ch.id;
-                                const isCell = ch._isVirtual;
-                                return (
-                                    <div 
-                                        key={ch.id} 
-                                        onClick={(e) => { e.stopPropagation(); onSelect?.(ch.id); }}
-                                        style={{ 
-                                            marginLeft: 30, display: 'flex', alignItems: 'center', gap: 10, 
-                                            padding: '6px 12px', background: chSelected ? '#eff6ff' : (isCell ? '#fff' : '#f8fafc'), 
-                                            borderRadius: 10, border: chSelected ? '1px solid #bfdbfe' : '1px solid #e2e8f0',
-                                            fontSize: 11, cursor: 'pointer', transition: 'all 0.2s', position: 'relative',
-                                            marginTop: 3, opacity: isCell && !ch.text ? 0.6 : 1
-                                        }}
-                                    >
-                                        <div style={{ position: 'absolute', left: -15, top: 0, bottom: '50%', width: 10, borderLeft: '2px solid #e2e8f0', borderBottom: '2px solid #e2e8f0', borderBottomLeftRadius: 6 }} />
-                                        <span style={{ fontSize: 13 }}>{iconOf(ch)}</span>
-                                        <div
-                                            style={{
-                                                flex: 1, fontWeight: chSelected ? 700 : 500, color: chSelected ? "#2563eb" : "#475569",
-                                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-                                            }}
-                                        >
-                                            {ch.label}
-                                        </div>
-                                        {/* Acciones */}
-                                        <button 
-                                            onClick={(e) => { 
-                                                e.stopPropagation(); 
-                                                if (ch._isVirtual) onRename?.(ch.id, { text: "" }); // Borrar contenido
-                                                else onRename?.(ch.id, { parentId: undefined });   // Eyectar
-                                            }}
-                                            style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 14 }}
-                                        >
-                                            {ch._isVirtual ? (ch.text ? '×' : '') : '⎋'}
-                                        </button>
-                                    </div>
-                                );
-                            })}
+                            {/* Table Hierarchy */}
+                            {el.type === 'table' && expandedIds.has(el.id) && (
+                                <div style={{ marginLeft: 20 }}>
+                                    {(el.table?.data || []).map((row, r) => {
+                                        // Row consumption check (Vertical Merges)
+                                        const isRowConsumed = row.every((_, c) => 
+                                            (el.table?.merges || []).some(m => 
+                                                r > m.r && r < m.r + m.rs && 
+                                                c >= m.c && c < m.c + m.cs
+                                            )
+                                        );
+                                        if (isRowConsumed && row.length > 0) return null;
+
+                                        return (
+                                            <div key={`row-${r}`} style={{ marginTop: 4 }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', padding: '4px 10px', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <div style={{ width: 8, height: 2, background: '#e2e8f0' }} /> FILA {r + 1}
+                                                    <div style={{ display: 'flex', gap: 2, marginLeft: 'auto' }}>
+                                                        <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'add-row', params: { r: r-1 } }); }} style={{ width: 18, height: 18, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>+</button>
+                                                        <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'add-row', params: { r: r } }); }} style={{ width: 18, height: 18, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>++</button>
+                                                        <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'del-row', params: { r: r } }); }} style={{ width: 18, height: 18, border: '1px solid #fee2e2', background: '#fef2f2', color: '#ef4444', borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>-</button>
+                                                        <div style={{ width: 1, height: 14, background: '#e2e8f0', margin: '0 4px' }} />
+                                                        <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'add-col' }); }} style={{ padding: '0 4px', height: 18, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#2563eb', borderRadius: 4, cursor: 'pointer', fontSize: 8, fontWeight: 800 }}>+ C</button>
+                                                        <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'del-col' }); }} style={{ padding: '0 4px', height: 18, border: '1px solid #fee2e2', background: '#fef2f2', color: '#ef4444', borderRadius: 4, cursor: 'pointer', fontSize: 8, fontWeight: 800 }}>- C</button>
+                                                    </div>
+                                                </div>
+                                                {row.map((cell, c) => {
+                                                    const cellId = `${el.id}:cell:${r}:${c}`;
+                                                    const isMerged = (el.table?.merges || []).some(m => 
+                                                        r >= m.r && r < m.r + m.rs && 
+                                                        c >= m.c && c < m.c + m.cs && 
+                                                        (r !== m.r || c !== m.c)
+                                                    );
+                                                    if (isMerged) return null;
+                                                    const chSelected = selectedId === cellId;
+                                                    const hasImage = cell?.includes('<img');
+                                                    const cellLabel = `C${c+1}${cell ? ': ' + (hasImage ? 'Imagen' : cell.substring(0, 10)) : ''}`;
+
+                                                    return (
+                                                        <div 
+                                                            key={cellId}
+                                                            onClick={(e) => { e.stopPropagation(); onSelect?.(cellId); }}
+                                                            style={{ 
+                                                                marginLeft: 20, display: 'flex', alignItems: 'center', gap: 8, 
+                                                                padding: '4px 12px', background: chSelected ? '#eff6ff' : '#fff', 
+                                                                borderRadius: 8, border: chSelected ? '1px solid #bfdbfe' : '1px solid #f1f5f9',
+                                                                fontSize: 10, cursor: 'pointer', transition: 'all 0.2s', position: 'relative',
+                                                                marginTop: 2, opacity: !cell ? 0.6 : 1
+                                                            }}
+                                                        >
+                                                            <span style={{ fontSize: 12 }}>{hasImage ? '🖼️' : (cell ? 'T' : '•')}</span>
+                                                            <div style={{ flex: 1, fontWeight: chSelected ? 700 : 500, color: chSelected ? "#2563eb" : "#64748b", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                {cellLabel}
+                                                            </div>
+                                                            <div style={{ display: 'flex', gap: 2 }}>
+                                                                <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'add-cell', params: { r: r, c: c } }); }} style={{ width: 16, height: 16, padding: 0, border: '1px solid #d1d5db', background: '#fff', color: '#2563eb', borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>+</button>
+                                                                <button onClick={(e) => { e.stopPropagation(); onRename?.(el.id, { _tableAction: 'del-cell', params: { r: r, c: c } }); }} style={{ width: 16, height: 16, padding: 0, border: '1px solid #fecdd3', background: '#fff1f2', color: '#e11d48', borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>-</button>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
                     );
                 })}

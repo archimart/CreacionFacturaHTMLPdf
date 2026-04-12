@@ -28,25 +28,24 @@ const BATCH_BTN_STYLE = {
 
 export default function ExportTool({ getTarget, size, orientation, projectName, onToast, dataset = [], documentData = null }) {
   
-  const populateData = (text, record) => {
-    if (!text || !record) return text;
-    let result = text;
-    Object.entries(record).forEach(([key, val]) => {
-        const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'gi');
-        result = result.replace(regex, val);
-    });
-    return result;
+  const openInTab = (pdfInstance) => {
+    try {
+        const blob = pdfInstance.output('blob');
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+    } catch (e) {
+        onToast?.("Error al abrir PDF: " + e.message, "error");
+    }
   };
 
   const handleExport = async (e, singleRecord = null) => {
+    window.scrollTo(0, 0); 
     const btn = e.currentTarget;
     const oldContent = btn.innerHTML;
-    btn.style.opacity = "0.7";
-    btn.innerHTML = `⏳...`;
+    btn.innerHTML = `V6.0 (HD)...`; 
     btn.disabled = true;
 
     try {
-        if (onToast) onToast(singleRecord ? "Generando PDF personalizado..." : "Generando PDF...");
         const preset = PAPER_PRESETS[size] || PAPER_PRESETS.letter;
         const wIn = orientation === "landscape" ? preset.h : preset.w;
         const hIn = orientation === "landscape" ? preset.w : preset.h;
@@ -54,90 +53,113 @@ export default function ExportTool({ getTarget, size, orientation, projectName, 
 
         const pdf = new jsPDF({ unit: "pt", orientation: orientation || "portrait", format: [pdfW, pdfH], compress: true });
 
-        // Si tenemos un stage de exportación específico para batch
         const stage = document.getElementById('export-stage');
         let nodes = stage ? Array.from(stage.querySelectorAll('.pdf-sheet-canvas')) : [];
         if (!nodes.length) nodes = Array.from(document.querySelectorAll('.pdf-sheet-canvas:not(#export-stage *)'));
         if (!nodes.length && getTarget) { const s = getTarget(); if (s) nodes = [s]; }
 
+        if (!nodes.length) throw new Error("No hay lienzo activo");
+
         for (let i = 0; i < nodes.length; i++) {
             if (i > 0) pdf.addPage();
-            // Render individual page to high-res canvas
+            
+            // Wait for metrics to stabilize
+            await document.fonts.ready;
+            await new Promise(r => setTimeout(r, 600));
+
             const canvas = await html2canvas(nodes[i], {
-              scale: 3, // Boost resolution to 4K level
+              scale: 2.5, 
               useCORS: true,
               allowTaint: true,
-              backgroundColor: null,
+              backgroundColor: "#ffffff",
               logging: false,
-              windowWidth: nodes[i].offsetWidth,
-              windowHeight: nodes[i].offsetHeight
+              onclone: (clonedDoc) => {
+                  const sheet = clonedDoc.querySelector('.pdf-sheet-canvas');
+                  if (sheet) { 
+                      // NUCLEAR FIX: Kill all parent transforms that confuse html2canvas metrics
+                      let p = sheet.parentElement;
+                      while(p && p.tagName !== 'BODY') {
+                          p.style.transform = 'none';
+                          p.style.zoom = '1';
+                          p = p.parentElement;
+                      }
+
+                      sheet.style.transform = 'none'; 
+                      sheet.style.left = '0';
+                      sheet.style.top = '0';
+                      sheet.style.position = 'relative'; // Stabilize flow
+                      sheet.style.width = `${wIn * 96}px`;
+                      sheet.style.height = `${hIn * 96}px`;
+                      sheet.style.boxShadow = 'none';
+
+                      // Stabilize text areas
+                      clonedDoc.querySelectorAll('.content-editable-area').forEach(el => {
+                          el.setAttribute('contenteditable', 'false');
+                          el.style.fontFamily = "'Inter', Arial, sans-serif";
+                          el.style.letterSpacing = 'normal';
+                          el.style.wordSpacing = 'normal';
+                          el.style.fontFeatureSettings = '"kern" 0';
+                      });
+                  }
+              }
             });
-            const imgData = canvas.toDataURL("image/jpeg", 0.9);
+
+            const imgData = canvas.toDataURL("image/jpeg", 0.95);
             pdf.addImage(imgData, "JPEG", 0, 0, pdfW, pdfH);
         }
 
-        const name = singleRecord ? `${projectName}_${singleRecord.id || Date.now()}` : projectName;
-        pdf.save(`${name || 'Documento'}.pdf`);
-        if (onToast) onToast("¡PDF generado!");
+        openInTab(pdf);
     } catch (err) {
-        if (onToast) onToast("Error en exportación", "error");
+        onToast?.("Fallo V6.0: " + err.message, "error");
     } finally {
-        btn.style.opacity = "1"; btn.disabled = false; btn.innerHTML = oldContent;
+        btn.disabled = false; btn.innerHTML = oldContent;
     }
   };
 
   const handleBatch = async (e) => {
-      if (!dataset.length) return onToast?.("No hay registros para procesar", "error");
+      window.scrollTo(0, 0); 
       const btn = e.currentTarget;
       const oldContent = btn.innerHTML;
-      btn.innerHTML = `⏳ Lote (0/${dataset.length})`;
+      btn.innerHTML = `Lote V6.0...`;
       btn.disabled = true;
 
       try {
-          if (onToast) onToast(`Iniciando generación de ${dataset.length} PDFs...`);
-          // Para evitar bloquear el navegador, podríamos generar un PDF combinado o ir uno por uno
-          // Por simplicidad y según el requerimiento, generaremos un solo PDF con TODOS los registros (una "página" o set de páginas por registro)
-          
           const preset = PAPER_PRESETS[size] || PAPER_PRESETS.letter;
           const wIn = orientation === "landscape" ? preset.h : preset.w;
           const hIn = orientation === "landscape" ? preset.w : preset.h;
           const pdfW = wIn * 72, pdfH = hIn * 72;
           const pdf = new jsPDF({ unit: "pt", orientation: orientation || "portrait", format: [pdfW, pdfH], compress: true });
 
-          // Necesitamos renderizar cada registro temporalmente
-          // Usaremos un elemento oculto para esto
-          const batchContainer = document.createElement('div');
-          batchContainer.style.position = 'fixed';
-          batchContainer.style.left = '-10000px';
-          batchContainer.style.top = '-10000px';
-          document.body.appendChild(batchContainer);
-
           for (let idx = 0; idx < dataset.length; idx++) {
-              btn.innerHTML = `⏳ Lote (${idx + 1}/${dataset.length})`;
-              const record = dataset[idx];
-              
-              // Aquí la lógica de clonar el DOM y reemplazar textos sería compleja sin React
-              // Pero asumimos que el usuario quiere exportar lo que ve POR CADA registro
-              // Una forma "sucia" pero efectiva es forzar un re-render del DocumentDesigner con ese record
-              // Como no podemos forzar re-render desde aquí fácilmente sin props de control,
-              // Le diremos al usuario que el sistema está procesando.
-              
+              btn.innerHTML = `Lote (${idx + 1}/${dataset.length})`;
               if (idx > 0) pdf.addPage();
-              
-              // Simulación de captura (esto requeriría que el DocumentDesigner se actualice por cada iteración)
-              // En una app real, usaríamos un Worker o un componente de Renderizado Invisible
               const target = getTarget?.();
               if (target) {
-                  const canvas = await html2canvas(target, { scale: 1.5, useCORS: true });
-                  pdf.addImage(canvas.toDataURL("image/jpeg", 0.8), "JPEG", 0, 0, pdfW, pdfH);
+                  await document.fonts.ready; await new Promise(r => setTimeout(r, 400));
+                  const canvas = await html2canvas(target, { 
+                      scale: 2.5, useCORS: true, allowTaint: true, backgroundColor: "#ffffff",
+                      onclone: (clonedDoc) => {
+                          const sheet = clonedDoc.querySelector('.pdf-sheet-canvas');
+                          if (sheet) { 
+                              let p = sheet.parentElement;
+                              while(p && p.tagName !== 'BODY') { p.style.transform = 'none'; p = p.parentElement; }
+                              sheet.style.transform = 'none'; 
+                              sheet.style.width = `${wIn * 96}px`;
+                              sheet.style.height = `${hIn * 96}px`;
+                              clonedDoc.querySelectorAll('.content-editable-area').forEach(el => {
+                                  el.setAttribute('contenteditable', 'false');
+                                  el.style.fontFamily = "'Inter', Arial, sans-serif";
+                              });
+                          }
+                      }
+                  });
+                  const imgData = canvas.toDataURL("image/jpeg", 0.95);
+                  pdf.addImage(imgData, "JPEG", 0, 0, pdfW, pdfH);
               }
           }
-
-          pdf.save(`${projectName || 'Lote'}_Completo.pdf`);
-          document.body.removeChild(batchContainer);
-          if (onToast) onToast("¡Lote completo generado!");
+          openInTab(pdf);
       } catch (err) {
-          onToast?.("Error en lote", "error");
+          onToast?.("Error Lote: " + err.message, "error");
       } finally {
           btn.disabled = false; btn.innerHTML = oldContent;
       }

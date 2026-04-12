@@ -38,6 +38,7 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
   }), [data]);
 
   const [selectedElementId, setSelectedElementId] = useState(null);
+  const [selectedCells, setSelectedCells] = useState([]);
   const [selectionRange, setSelectionRange] = useState(null);
   const [zoom, setZoom] = useState(0.75);
   const [activeTab, setActiveTab] = useState("elements"); 
@@ -46,6 +47,15 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
 
   const [history, setHistory] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
+
+  const handleSelectId = (id) => {
+      setSelectedElementId(id);
+      if (id && id.includes(':cell:')) {
+          setActiveTab("AJUSTES");
+      } else {
+          setSelectedCells([]);
+      }
+  };
 
   const snapshot = () => {
     setHistory(prev => [JSON.parse(JSON.stringify(data)), ...prev].slice(0, 50));
@@ -97,19 +107,20 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
     if (!selectedElementId) return;
     const pIdx = safeData.pages.findIndex(p => p.id === selectedElementId);
     if (pIdx !== -1) { setActivePageIdx(pIdx); return; }
-    const realId = selectedElementId.includes('::cell:') ? selectedElementId.split('::cell:')[0] : selectedElementId;
+    const realId = selectedElementId.includes(':cell:') ? selectedElementId.split(':cell:')[0] : selectedElementId;
     const el = safeData.elements.find(e => e.id === realId);
     if (el?.pageId) { const pageIdx = safeData.pages.findIndex(p => p.id === el.pageId); if (pageIdx !== -1) setActivePageIdx(pageIdx); }
   }, [selectedElementId, safeData]);
 
   const handleUpdateElement = (id, patch) => {
+    if (!id) return;
     snapshot();
     if (safeData.pages.some(p => p.id === id)) { 
         onUpdate({ pages: safeData.pages.map(p => p.id === id ? { ...p, ...patch, name: patch.name !== undefined ? patch.name : (patch.label !== undefined ? patch.label : p.name) } : p) }); 
         return; 
     }
-    if (id.includes('::cell:')) {
-      const parts = id.split(':'), tableId = parts[0], r = parts[3], c = parts[4];
+    if (id.includes(':cell:')) {
+      const parts = id.split(':'), tableId = parts[0], r = parts[2], c = parts[3];
       onUpdate({ elements: safeData.elements.map(el => {
         if (el.id === tableId) {
           const table = { ...(el.table || {}) };
@@ -161,37 +172,217 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
         id, type, pageId: safeData.pages[activePageIdx].id, x: 100, y: 100, w: type==='table'?400:200, h: type==='table'?150:100, 
         text: type === 'text' ? "Escribe algo..." : "", 
         z: safeData.elements.length,
-        style: { fontSize: 16, border: type === 'box' ? "2px solid #334155" : "0px solid transparent", color: "#0f172a", background: type === 'box' ? "#ffffff" : "transparent", borderRadius: 0, padding: 0 }, 
+        style: { 
+          fontSize: 16, 
+          borderWidth: (type === 'box' || type === 'table') ? "1px" : "0px", 
+          borderStyle: "solid",
+          borderColor: "#cbd5e1",
+          color: "#0f172a", 
+          background: (type === 'box' || type === 'table') ? "#ffffff" : "transparent", 
+          borderRadius: 0, 
+          padding: 0 
+        }, 
         ...extra 
     };
     onUpdate({ elements: [...safeData.elements, newEl] }); 
-    setSelectedElementId(id); 
+    handleSelectId(id); 
     setSelectionRange(null); 
     showToast(`Añadido: ${type}`);
   };
 
-  const handleDeleteSelected = () => {
-    if (!selectedElementId) return;
+  const handleTableAction = (tableId, action, params = {}) => {
     snapshot();
-    const isP = safeData.pages.some(p => p.id === selectedElementId);
+    onUpdate({ 
+      elements: safeData.elements.map(el => {
+        if (el.id !== tableId) return el;
+        const t = JSON.parse(JSON.stringify(el.table || { rows: 2, cols: 2 }));
+        const rows = t.rows || 2, cols = t.cols || 2;
+        const targetR = params.r !== undefined ? params.r : rows - 1;
+        const targetC = params.c !== undefined ? params.c : cols - 1;
+
+        if (action === 'add-row') {
+            const insertAt = targetR + 1;
+            t.rows = rows + 1;
+            const newData = [], newStyles = {};
+            for(let r=0; r<t.rows; r++){
+                if(r < insertAt) newData[r] = (t.data||[])[r] || [];
+                else if(r === insertAt) newData[r] = [];
+                else newData[r] = (t.data||[])[r-1] || [];
+            }
+            Object.entries(t.cellStyles || {}).forEach(([k,v]) => {
+                const [r,c] = k.split(':').map(Number);
+                if(r >= insertAt) newStyles[`${r+1}:${c}`] = v;
+                else newStyles[k] = v;
+            });
+            if (t.rowHeights) {
+                const nextHeights = [...t.rowHeights];
+                nextHeights.splice(insertAt, 0, nextHeights[targetR] || 50);
+                t.rowHeights = nextHeights;
+            }
+            t.data = newData; t.cellStyles = newStyles;
+        } else if (action === 'del-row') {
+            if (rows <= 1) return el;
+            t.rows = rows - 1;
+            const newData = [], newStyles = {}, newMerges = [];
+            for(let r=0; r<t.rows; r++){
+                if(r < targetR) newData[r] = (t.data||[])[r] || [];
+                else newData[r] = (t.data||[])[r+1] || [];
+            }
+            Object.entries(t.cellStyles || {}).forEach(([k,v]) => {
+                const [r,c] = k.split(':').map(Number);
+                if(r === targetR) return;
+                if(r > targetR) newStyles[`${r-1}:${c}`] = v;
+                else newStyles[k] = v;
+            });
+            (t.merges || []).forEach(m => {
+                if (m.r === targetR) return; 
+                if (m.r > targetR) newMerges.push({ ...m, r: m.r - 1 });
+                else if (m.r + m.rs - 1 >= targetR) newMerges.push({ ...m, rs: m.rs - 1 }); 
+                else newMerges.push(m);
+            });
+            if (t.rowHeights) {
+                const nextHeights = [...t.rowHeights];
+                nextHeights.splice(targetR, 1);
+                t.rowHeights = nextHeights;
+            }
+            t.data = newData; t.cellStyles = newStyles; t.merges = newMerges.filter(m => m.rs > 0 && m.cs > 0);
+        } else if (action === 'del-cell') {
+            const newData = [...(t.data || [])];
+            const rowData = [...(newData[targetR] || [])];
+            rowData.splice(targetC, 1);
+            newData[targetR] = rowData;
+            
+            // Desplazar estilos solo en esa fila
+            const newStyles = {};
+            Object.entries(t.cellStyles || {}).forEach(([k, v]) => {
+                const [r, c] = k.split(':').map(Number);
+                if (r !== targetR) { newStyles[k] = v; return; }
+                if (c === targetC) return;
+                if (c > targetC) newStyles[`${r}:${c-1}`] = v;
+                else newStyles[k] = v;
+            });
+            t.data = newData; t.cellStyles = newStyles;
+        } else if (action === 'add-cell') {
+            // Inserción LOCAL por fila
+            const newData = [...(t.data || [])];
+            const rowData = [...(newData[targetR] || [])];
+            const insertAt = targetC + 1;
+            rowData.splice(insertAt, 0, "");
+            newData[targetR] = rowData;
+            
+            // Si la fila ahora es la más ancha, actualizamos cols
+            t.cols = Math.max(t.cols, rowData.length);
+
+            // Desplazar estilos solo en esa fila
+            const newStyles = {};
+            Object.entries(t.cellStyles || {}).forEach(([k, v]) => {
+                const [r, c] = k.split(':').map(Number);
+                if (r !== targetR) { newStyles[k] = v; return; }
+                if (c >= insertAt) newStyles[`${r}:${c+1}`] = v;
+                else newStyles[k] = v;
+            });
+            t.data = newData; t.cellStyles = newStyles;
+        } else if (action === 'add-col') {
+            const insertAt = targetC + 1;
+            t.cols = cols + 1;
+            const newData = [], newStyles = {};
+            for(let r=0; r<rows; r++){
+                newData[r] = [];
+                for(let c=0; c<t.cols; c++){
+                    if(c < insertAt) newData[r][c] = (t.data||[])[r]?.[c] || "";
+                    else if(c === insertAt) newData[r][c] = "";
+                    else newData[r][c] = (t.data||[])[r]?.[c-1] || "";
+                }
+            }
+            Object.entries(t.cellStyles || {}).forEach(([k,v]) => {
+                const [r,c] = k.split(':').map(Number);
+                if(c >= insertAt) newStyles[`${r}:${c+1}`] = v;
+                else newStyles[k] = v;
+            });
+            // Update colWidths
+            if (t.colWidths) {
+                const nextWidths = [...t.colWidths];
+                nextWidths.splice(insertAt, 0, nextWidths[targetC] || 100);
+                t.colWidths = nextWidths;
+            }
+            // Merges add col simplification: just shift those to right of insert
+            t.merges = (t.merges || []).map(m => m.c >= insertAt ? { ...m, c: m.c + 1 } : (m.c + m.cs - 1 >= insertAt ? { ...m, cs: m.cs + 1 } : m));
+            t.data = newData; t.cellStyles = newStyles;
+        } else if (action === 'del-col') {
+            if (cols <= 1) return el;
+            t.cols = cols - 1;
+            const newData = [], newStyles = {}, newMerges = [];
+            for(let r=0; r<rows; r++){
+                newData[r] = [];
+                for(let c=0; c<t.cols; c++){
+                    if(c < targetC) newData[r][c] = (t.data||[])[r]?.[c] || "";
+                    else newData[r][c] = (t.data||[])[r]?.[c+1] || "";
+                }
+            }
+            Object.entries(t.cellStyles || {}).forEach(([k,v]) => {
+                const [r,c] = k.split(':').map(Number);
+                if(c === targetC) return;
+                if(c > targetC) newStyles[`${r}:${c-1}`] = v;
+                else newStyles[k] = v;
+            });
+            // Update colWidths
+            if (t.colWidths) {
+                const nextWidths = [...t.colWidths];
+                nextWidths.splice(targetC, 1);
+                t.colWidths = nextWidths;
+            }
+            (t.merges || []).forEach(m => {
+                if (m.c === targetC) return;
+                if (m.c > targetC) newMerges.push({ ...m, c: m.c - 1 });
+                else if (m.c + m.cs - 1 >= targetC) newMerges.push({ ...m, cs: m.cs - 1 });
+                else newMerges.push(m);
+            });
+            t.data = newData; t.cellStyles = newStyles; t.merges = newMerges.filter(m => m.rs > 0 && m.cs > 0);
+        } else if (action === 'update-dims') {
+            t.colWidths = params.colWidths || t.colWidths;
+            t.rowHeights = params.rowHeights || t.rowHeights;
+        }
+        return { ...el, table: t };
+      })
+    });
+    showToast("Tabla actualizada");
+  };
+
+  const handleDelete = (id = selectedElementId) => {
+    if (!id) return;
+    snapshot();
+    const isP = safeData.pages.some(p => p.id === id);
     if (isP) {
         if (safeData.pages.length <= 1) return showToast("No puedes borrar la última hoja", "error");
-        onUpdate({ pages: safeData.pages.filter(p => p.id !== selectedElementId), elements: safeData.elements.filter(el => el.pageId !== selectedElementId) });
-        setSelectedElementId(null); setActivePageIdx(0); showToast("Página borrada"); 
+        onUpdate({ 
+          pages: safeData.pages.filter(p => p.id !== id), 
+          elements: safeData.elements.filter(el => el.pageId !== id) 
+        });
+        if(selectedElementId === id) handleSelectId(null); 
+        setActivePageIdx(0); showToast("Página borrada"); 
         return;
     }
-    const targetId = selectedElementId.includes('::cell:') ? selectedElementId.split('::cell:')[0] : selectedElementId;
-    onUpdate({ elements: safeData.elements.filter(el => el.id !== targetId) });
-    setSelectedElementId(null); 
-    showToast("Borrado");
+    // Si es una celda, solo borramos contenido (estándar en Excel/Tablas)
+    if (id.includes(':cell:')) {
+        handleUpdateElement(id, { text: "" });
+        showToast("Contenido de celda borrado");
+        return;
+    }
+    // Borrar elemento raíz (tabla, imagen, etc)
+    const targetId = id.includes(':cell:') ? id.split(':cell:')[0] : id;
+    onUpdate({ elements: safeData.elements.map(el => el.id === targetId ? null : el).filter(Boolean) });
+    if(selectedElementId === id || (selectedElementId && selectedElementId.startsWith(targetId))) {
+        handleSelectId(null);
+    }
+    showToast("Elemento eliminado");
   };
 
   const undoRef = useRef(undo);
   const redoRef = useRef(redo);
-  const handleDeleteRef = useRef(handleDeleteSelected);
+  const handleDeleteRef = useRef(handleDelete);
   undoRef.current = undo;
   redoRef.current = redo;
-  handleDeleteRef.current = handleDeleteSelected;
+  handleDeleteRef.current = handleDelete;
 
   useEffect(() => {
     const handleDesignerKeys = (e) => {
@@ -205,7 +396,6 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
         if (!isEditing && (e.key === 'Delete' || e.key === 'Backspace') && selectedElementId) {
             e.preventDefault();
             handleDeleteRef.current();
-            showToast("OBJETO ELIMINADO");
         }
     };
     window.addEventListener('keydown', handleDesignerKeys);
@@ -216,18 +406,18 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
     if (!selectedElementId) return null;
     const pageObj = safeData.pages.find(p => p.id === selectedElementId);
     if (pageObj) return { ...pageObj, type: 'page', label: pageObj.name || `Hoja`, _isPage: true };
-    if (selectedElementId.includes('::cell:')) {
-      const parts = selectedElementId.split(':'), tableId = parts[0], r = parts[3], c = parts[4];
+    if (selectedElementId.includes(':cell:')) {
+      const parts = selectedElementId.split(':'), tableId = parts[0], r = parseInt(parts[2]), c = parseInt(parts[3]);
       const table = safeData.elements.find(el => el.id === tableId);
       if (!table) return null;
       const cellStyle = table.table?.cellStyles?.[`${r}:${c}`] || {};
-      return { id: selectedElementId, type: 'cell', text: table.table?.data?.[r]?.[c] || "", style: cellStyle, _isCell: true, _cellPos: { r: parseInt(r), c: parseInt(c) }, parentId: tableId, table: table.table };
+      return { id: selectedElementId, type: 'cell', text: table.table?.data?.[r]?.[c] || "", style: cellStyle, _isCell: true, _cellPos: { r, c }, parentId: tableId, table: table.table };
     }
     return safeData.elements.find((el) => el.id === selectedElementId);
   }, [safeData, selectedElementId]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f1f5f9", overflow: "hidden", fontFamily: "'Outfit', sans-serif" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#e2e8f0", overflow: "hidden", fontFamily: "'Outfit', sans-serif" }}>
         <style>{`
             .glass { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.4); box-shadow: 0 8px 32px rgba(0,0,0,0.05); }
             .premium-btn { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; border: 1px solid transparent; }
@@ -334,14 +524,17 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                     }}
                     onMouseUp={() => { setIsPanning(false); viewportRef.current.style.cursor = "auto"; }}
                     onMouseLeave={() => { setIsPanning(false); viewportRef.current.style.cursor = "auto"; }}
-                    style={{ flex: 1, position: "relative", overflow: "auto", display: "flex", justifyContent: "center", padding: "100px 50px", cursor: "auto" }}
+                    style={{ flex: 1, position: "relative", overflow: "auto", display: "flex", justifyContent: "center", padding: "60px 50px 400px 50px", cursor: "auto" }}
                 >
                     <div style={{ transform: `scale(${zoom})`, transformOrigin: "top center", transition: isPanning ? "none" : "transform 0.15s ease-out" }}>
-                        <PaperCanvas size={safeData.size} orientation={safeData.orientation} background={safeData.pages[activePageIdx]?.bgUrl} onMouseDown={() => { setSelectedElementId(safeData.pages[activePageIdx].id); setSelectionRange(null); }}>
+                        <PaperCanvas size={safeData.size} orientation={safeData.orientation} background={safeData.pages[activePageIdx]?.bgUrl} onMouseDown={() => { handleSelectId(safeData.pages[activePageIdx].id); setSelectionRange(null); }}>
                             <WorkLayer 
                                 elements={safeData.elements.filter(el => el.pageId === safeData.pages[activePageIdx].id)} 
+                                dataset={dataset}
                                 selectedId={selectedElementId} 
-                                onSelect={setSelectedElementId} 
+                                selectedCells={selectedCells}
+                                onSelect={handleSelectId} 
+                                onSelectCells={setSelectedCells}
                                 onChange={handleUpdateElement} 
                                 selectionRange={selectionRange}
                                 onRangeSelect={setSelectionRange}
@@ -358,6 +551,7 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                     {[
                         { id: 'elements', icon: <Sliders size={18}/>, label: "AJUSTES" }, 
                         { id: 'layers', icon: <Layers size={18}/>, label: "ORDEN" }, 
+                        { id: 'data', icon: <Database size={18}/>, label: "DATOS" },
                         { id: 'history', icon: <Clock size={18}/>, label: "LOG" }
                     ].map(t => (
                         <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ 
@@ -368,19 +562,127 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                         }}>{t.icon} {t.label}</button>
                     ))}
                 </div>
-                <div style={{ flex: 1, overflowY: "auto" }}>
+                <div style={{ flex: 1, overflowY: "auto", position: "relative" }}>
                     {activeTab === "elements" && (
-                        <div style={{ animation: "scaleIn 0.3s" }}>
-                            <PropertiesPanel 
-                                el={selectedElement} 
-                                onRename={v => handleUpdateElement(selectedElementId, { label: v })} 
-                                onChange={p => handleUpdateElement(selectedElementId, p)} 
-                                onStyle={s => handleUpdateElement(selectedElementId, { style: s })} 
-                                onDelete={handleDeleteSelected} 
-                                selectionRange={selectionRange}
-                                onRangeSelect={setSelectionRange}
-                                lastSelectionRange={lastSelectionRef.current}
+                        <div style={{ animation: "scaleIn 0.3s" }} onMouseDown={e => e.stopPropagation()}>
+                            <PropertiesPanel
+                                el={selectedElementId ? (safeData.elements.find(e => e.id === selectedElementId) || { id: selectedElementId, _isCell: selectedElementId?.includes(':cell:'), table: safeData.elements.find(t => selectedElementId?.startsWith(t.id))?.table }) : undefined}
+                                selectedCells={selectedCells}
+                                onStyle={(s) => {
+                                    const targetId = selectedElementId?.includes(':cell:') ? selectedElementId.split(':cell:')[0] : selectedElementId;
+                                    handleUpdateElement(targetId, { style: { ...(safeData.elements.find(e => e.id === targetId)?.style || {}), ...s } });
+                                }}
+                                onChange={(p) => {
+                                    const targetId = selectedElementId?.includes(':cell:') ? selectedElementId.split(':cell:')[0] : selectedElementId;
+                                    handleUpdateElement(targetId, p);
+                                }}
+                                onDelete={handleDelete}
                             />
+
+                            {/* PERSISTENT TABLE ACTIONS BAR (Always visible if cells selected) */}
+                            {selectedCells.length > 0 && (
+                                <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "20px", background: "white", borderTop: "2px solid #3b82f6", boxShadow: "0 -10px 25px rgba(0,0,0,0.1)", zIndex: 1000, display: "flex", flexDirection: "column", gap: 10 }}>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                        <span style={{ fontSize: "11px", fontWeight: "900", color: "#3b82f6", textTransform: "uppercase" }}>Asistente de Tabla</span>
+                                        <span style={{ fontSize: "10px", color: "#94a3b8" }}>{selectedCells.length} celdas seleccionadas</span>
+                                    </div>
+                                    
+                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                        <button 
+                                            onClick={() => {
+                                                const rows = selectedCells.map(c => c.r);
+                                                const cols = selectedCells.map(c => c.c);
+                                                const minR = Math.min(...rows), maxR = Math.max(...rows);
+                                                const minC = Math.min(...cols), maxC = Math.max(...cols);
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                const table = tableEl?.table || {};
+                                                const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
+                                                const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
+                                                handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
+                                            }}
+                                            disabled={selectedCells.length < 2}
+                                            style={{
+                                                flex: 2, padding: "12px", borderRadius: "10px", border: "none",
+                                                background: selectedCells.length < 2 ? "#e2e8f0" : "#3b82f6",
+                                                color: selectedCells.length < 2 ? "#94a3b8" : "white",
+                                                fontSize: "10px", fontWeight: "900", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5
+                                            }}
+                                        >
+                                            <Zap size={14} /> UNIR
+                                        </button>
+
+                                        <button 
+                                            onClick={() => {
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                const table = tableEl?.table || {};
+                                                const rows = selectedCells.map(c => c.r);
+                                                const cols = selectedCells.map(c => c.c);
+                                                const newMerges = (table.merges || []).filter(m => 
+                                                    !selectedCells.some(sc => sc.r === m.r && sc.c === m.c)
+                                                );
+                                                handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
+                                            }}
+                                            style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f1f5f9", border: "none", fontSize: "10px", fontWeight: "900", color: "#1e293b", cursor: "pointer" }}
+                                        >SEPARAR</button>
+
+                                        <div style={{ display: "flex", gap: 4, flex: 3 }}>
+                                            <button onClick={() => {
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                handleTableAction(targetId, 'add-row');
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }}>FILA +</button>
+                                            <button onClick={() => {
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                handleTableAction(targetId, 'del-row');
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }}>FILA -</button>
+                                            <button onClick={() => {
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                handleTableAction(targetId, 'add-col');
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }}>COL +</button>
+                                            <button onClick={() => {
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                handleTableAction(targetId, 'del-col');
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }}>COL -</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {activeTab === "data" && (
+                        <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
+                            <div style={{ marginBottom: 20 }}>
+                                <h3 style={{ fontSize: 13, fontWeight: 900, color: "#1e293b", marginBottom: 4 }}>FUENTES DE DATOS</h3>
+                                <p style={{ fontSize: 11, color: "#64748b" }}>Usa estas variables en tus textos con doble llave: <b>{`{{variable}}`}</b></p>
+                            </div>
+                            
+                            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                {dataset.length > 0 ? (
+                                    Object.entries(dataset[0]).map(([key, val]) => (
+                                        <div key={key} style={{ padding: "16px", borderRadius: "12px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                                <code style={{ fontSize: 11, fontWeight: 900, color: "#3b82f6", background: "#eff6ff", padding: "4px 8px", borderRadius: 6 }}>{`{{${key}}}`}</code>
+                                                <button 
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(`{{${key}}}`);
+                                                        showToast("¡Copiado al portapapeles!");
+                                                    }}
+                                                    style={{ border: "none", background: "none", cursor: "pointer", color: "#94a3b8" }}
+                                                ><Copy size={14}/></button>
+                                            </div>
+                                            <div style={{ fontSize: 12, color: "#1e293b" }}>
+                                                <span style={{ color: "#94a3b8", fontSize: "10px", display: "block", marginBottom: 2 }}>VALOR DE MUESTRA:</span>
+                                                {String(val)}
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                                        No hay datos de muestra cargados.
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                     {activeTab === "layers" && (
@@ -390,7 +692,16 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                                 pages={safeData.pages} 
                                 selectedId={selectedElementId} 
                                 onSelect={setSelectedElementId} 
-                                onRename={(id, name) => handleUpdateElement(id, { label: name })}
+                                onRename={(id, val) => {
+                                    if (typeof val === 'object' && val._tableAction) {
+                                        handleTableAction(id, val._tableAction, val.params || {});
+                                    } else if (id.includes(':cell:')) {
+                                        handleUpdateElement(id, val);
+                                    } else {
+                                        handleUpdateElement(id, { label: val });
+                                    }
+                                }}
+                                onDelete={handleDelete}
                                 onRenamePage={(id, name) => handleUpdateElement(id, { name })}
                                 onMovePage={handleMovePage}
                                 onReorder={handleReorderElements}

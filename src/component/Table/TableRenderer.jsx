@@ -181,9 +181,10 @@ export default function TableRenderer({
               fontStyle: "inherit",
               textDecoration: "inherit",
               fontSize: "inherit",
-              display: "flex", 
-              justifyContent: customStyle.verticalAlign === 'bottom' ? 'flex-end' : 
-                                customStyle.verticalAlign === 'top' ? 'flex-start' : 'center',
+              display: "block", 
+              textAlign: customStyle.textAlign || "left",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
               pointerEvents: isEditingThis ? "auto" : "none"
             }}
           />
