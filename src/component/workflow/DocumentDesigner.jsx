@@ -1,8 +1,8 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from "react";
 import { 
   Square, Type, Image as ImageIcon, Layout, Move, Palette, MousePointer2, 
   Trash2, Copy, Layers, Maximize2, Minimize2, ZoomIn, ZoomOut, 
-  ChevronLeft, ChevronRight, Settings2, Download, Printer, Share2, 
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Settings2, Download, Printer, Share2, 
   Box, FileText, Smartphone, Table as TableIcon, Database, Check, History, 
   BarChart2, Plus, Smile, Sliders, Monitor, Crop, 
   MoreHorizontal, ChevronDown, AlignLeft, Info, Grid, List, Search, Play, Sun, Moon,
@@ -27,7 +27,7 @@ const GLASS_STYLE = {
     boxShadow: "0 8px 32px 0 rgba(31, 38, 135, 0.07)"
 };
 
-export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
+export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }) {
   const safeData = useMemo(() => ({
     pages: Array.isArray(data?.pages) && data.pages.length > 0 ? data.pages : [{ id: 'p1', name: 'Hoja Principal', bgUrl: "" }],
     elements: Array.isArray(data?.elements) ? data.elements : [],
@@ -43,6 +43,7 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
   const [zoom, setZoom] = useState(0.75);
   const [activeTab, setActiveTab] = useState("elements"); 
   const [activePageIdx, setActivePageIdx] = useState(0); 
+  const [recordIdx, setRecordIdx] = useState(0);
   const [toast, setToast] = useState(null);
 
   const [history, setHistory] = useState([]);
@@ -102,6 +103,24 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
     return saved ? JSON.parse(saved) : [];
   });
   useEffect(() => { localStorage.setItem(`versions_${safeData.id}`, JSON.stringify(versions)); }, [versions, safeData.id]);
+  
+  const centerView = () => {
+    if (viewportRef.current) {
+        setZoom(0.75);
+        setTimeout(() => {
+            if (viewportRef.current) {
+                const vp = viewportRef.current;
+                vp.scrollLeft = (vp.scrollWidth - vp.clientWidth) / 2;
+                vp.scrollTop = (vp.scrollHeight - vp.clientHeight) / 2;
+            }
+        }, 50);
+        showToast("VISTA CENTRADA");
+    }
+  };
+
+  useEffect(() => {
+    centerView();
+  }, []);
 
   useEffect(() => {
     if (!selectedElementId) return;
@@ -164,6 +183,10 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
           onUpdate({ elements: nextElements.sort((a,b) => (a.z||0) - (b.z||0)) });
       }
   };
+
+    useLayoutEffect(() => {
+        window.__EDITOR_DATASET__ = dataset;
+    }, [dataset]);
 
   const addElement = (type, extra = {}) => {
     snapshot();
@@ -342,11 +365,52 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
             t.colWidths = params.colWidths || t.colWidths;
             t.rowHeights = params.rowHeights || t.rowHeights;
         }
-        return { ...el, table: t };
+        const updatedEl = { ...el, table: t };
+        // Sync total width and height
+        if (t.colWidths) updatedEl.w = t.colWidths.reduce((a, b) => a + b, 0);
+        if (t.rowHeights) updatedEl.h = t.rowHeights.reduce((a, b) => a + b, 0);
+        return updatedEl;
       })
     });
-    showToast("Tabla actualizada");
   };
+
+  const setTableStructure = (tableId, type, count) => {
+    snapshot();
+    onUpdate({
+      elements: safeData.elements.map(el => {
+        if (el.id !== tableId) return el;
+        const table = { ...(el.table || { rows: 1, cols: 1 }) };
+        if (type === 'rows') {
+          const oldRows = table.rows || 1;
+          const newRows = Math.max(1, count);
+          table.rows = newRows;
+          const data = [...(table.data || [])];
+          while (data.length < newRows) data.push(Array(table.cols || 1).fill(""));
+          table.data = data.slice(0, newRows);
+          const heights = [...(table.rowHeights || Array(oldRows).fill((el.h || 50) / oldRows))];
+          while (heights.length < newRows) heights.push(25);
+          table.rowHeights = heights.slice(0, newRows);
+          el.h = table.rowHeights.reduce((a, b) => a + b, 0);
+        } else {
+            const oldCols = table.cols || 1;
+            const newCols = Math.max(1, count);
+            table.cols = newCols;
+            const data = (table.data || []).map(row => {
+                const r = [...row];
+                while (r.length < newCols) r.push("");
+                return r.slice(0, newCols);
+            });
+            table.data = data;
+            const widths = [...(table.colWidths || Array(oldCols).fill((el.w || 100) / oldCols))];
+            while (widths.length < newCols) widths.push(100);
+            table.colWidths = widths.slice(0, newCols);
+            el.w = table.colWidths.reduce((a, b) => a + b, 0);
+        }
+        return { ...el, table };
+      })
+    });
+  };
+
 
   const handleDelete = (id = selectedElementId) => {
     if (!id) return;
@@ -417,17 +481,17 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
   }, [safeData, selectedElementId]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#e2e8f0", overflow: "hidden", fontFamily: "'Outfit', sans-serif" }}>
+    <div className={theme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--editor-bg)", overflow: "hidden", fontFamily: "'Outfit', sans-serif" }}>
         <style>{`
-            .glass { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.4); box-shadow: 0 8px 32px rgba(0,0,0,0.05); }
-            .premium-btn { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; border: 1px solid transparent; }
+            .glass { background: var(--surface-glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--node-border); box-shadow: 0 8px 32px rgba(0,0,0,0.05); }
+            .premium-btn { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; border: 1px solid transparent; background: var(--btn-bg); color: var(--btn-text); }
             .premium-btn:hover { transform: translateY(-2px); background: #3b82f6 !important; color: #fff !important; box-shadow: 0 10px 20px rgba(59,130,246,0.2) !important; }
             .premium-btn:active { transform: scale(0.95); }
             .thumb-card.active { border: 4px solid #3b82f6 !important; bottom: 10px; box-shadow: 0 20px 40px rgba(59,130,246,0.2) !important; }
             @keyframes flyIn { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
             @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
             ::-webkit-scrollbar { width: 6px; height: 6px; }
-            ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+            ::-webkit-scrollbar-thumb { background: var(--btn-border); border-radius: 10px; }
         `}</style>
 
         {/* GLASS HEADER */}
@@ -456,13 +520,98 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
 
             <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
                 <div className="glass" style={{ display: "flex", borderRadius: 16, padding: "6px 12px", alignItems: "center", gap: 10 }}>
-                    <button onClick={() => setZoom(z => Math.max(0.1, z - 0.1))} className="premium-btn" style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: "rgba(0,0,0,0.03)", display:"flex", alignItems:"center", justifyContent:"center" }}><ZoomOut size={16}/></button>
-                    <div style={{ width: 60, textAlign: "center", fontSize: 14, fontWeight: 900, color: "#1e293b" }}>{Math.round(zoom * 100)}%</div>
-                    <button onClick={() => setZoom(z => Math.min(3, z + 0.1))} className="premium-btn" style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: "rgba(0,0,0,0.03)", display:"flex", alignItems:"center", justifyContent:"center" }}><ZoomIn size={16}/></button>
+                    <button onClick={() => setZoom(z => Math.max(0.1, z - 0.1))} className="premium-btn" style={{ width: 34, height: 34, borderRadius: 10, border: "none", display:"flex", alignItems:"center", justifyContent:"center" }}><ZoomOut size={16}/></button>
+                    <div style={{ width: 60, textAlign: "center", fontSize: 14, fontWeight: 900, color: "var(--node-text)" }}>{Math.round(zoom * 100)}%</div>
+                    <button onClick={() => setZoom(z => Math.min(3, z + 0.1))} className="premium-btn" style={{ width: 34, height: 34, borderRadius: 10, border: "none", display:"flex", alignItems:"center", justifyContent:"center" }}><ZoomIn size={16}/></button>
                 </div>
                 <ExportTool size={safeData.size} orientation={safeData.orientation} projectName={safeData.name} onToast={showToast} />
             </div>
         </div>
+
+        {/* RECORD NAVIGATION BAR */}
+        {dataset && dataset.length > 0 && (
+            <div className="glass" style={{ margin: "0 20px 10px 20px", padding: "12px 30px", borderRadius: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 12, background: "rgba(59,130,246,0.1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#3b82f6" }}>
+                            <Database size={20} />
+                        </div>
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 900, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1 }}>Vista de Registros</div>
+                            <div style={{ fontSize: 14, fontWeight: 900, color: "#1e293b" }}>{dataset.length} Registros Cargados</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <button 
+                        disabled={recordIdx === 0}
+                        onClick={() => setRecordIdx(0)}
+                        className="premium-btn" 
+                        style={{ padding: "10px", borderRadius: 12, border: "none", opacity: recordIdx === 0 ? 0.3 : 1 }}
+                        title="Primer Registro"
+                    >
+                        <ChevronsLeft size={20}/>
+                    </button>
+
+                    <button 
+                        disabled={recordIdx === 0}
+                        onClick={() => setRecordIdx(prev => Math.max(0, prev - 1))}
+                        className="premium-btn" 
+                        style={{ padding: "10px 15px", borderRadius: 12, border: "none", opacity: recordIdx === 0 ? 0.3 : 1 }}
+                    >
+                        <ChevronLeft size={16}/>
+                    </button>
+                    
+                    <div style={{ background: "rgba(59,130,246,0.05)", padding: "10px 20px", borderRadius: 12, border: "1px solid rgba(59,130,246,0.1)", display: "flex", alignItems: "center", gap: 8 }}>
+                        <input 
+                            type="number" 
+                            min="1" 
+                            max={dataset.length}
+                            value={recordIdx + 1}
+                            onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) {
+                                    setRecordIdx(Math.max(0, Math.min(dataset.length - 1, val - 1)));
+                                }
+                            }}
+                            style={{ 
+                                background: "var(--input-bg)", border: "1px solid var(--node-border)", borderRadius: 8, minWidth: 100, width: "100px", padding: "8px 10px", 
+                                textAlign: "center", fontWeight: 900, fontSize: 18, color: "#3b82f6", outline: "none",
+                                boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)"
+                            }}
+                        />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--node-desc)" }}>de {dataset.length.toLocaleString()}</span>
+                    </div>
+
+                    <button 
+                        disabled={recordIdx === dataset.length - 1}
+                        onClick={() => setRecordIdx(prev => Math.min(dataset.length - 1, prev + 1))}
+                        className="premium-btn" 
+                        style={{ padding: "10px 15px", borderRadius: 12, border: "none", opacity: recordIdx === dataset.length - 1 ? 0.3 : 1 }}
+                    >
+                        <ChevronRight size={16}/>
+                    </button>
+
+                    <button 
+                        disabled={recordIdx === dataset.length - 1}
+                        onClick={() => setRecordIdx(dataset.length - 1)}
+                        className="premium-btn" 
+                        style={{ padding: "10px", borderRadius: 12, border: "none", opacity: recordIdx === dataset.length - 1 ? 0.3 : 1 }}
+                        title="Último Registro"
+                    >
+                        <ChevronsRight size={20}/>
+                    </button>
+                </div>
+
+                <div style={{ width: 250, display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "right" }}>PROGRESO DE REVISIÓN</div>
+                    <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ width: `${((recordIdx + 1) / dataset.length) * 100}%`, height: "100%", background: "#3b82f6", transition: "width 0.3s ease" }} />
+                    </div>
+                </div>
+            </div>
+        )}
 
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
             {/* FLOATING LEFT TOOLBAR */}
@@ -476,6 +625,12 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                     <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "center" }}>DATA</div>
                     <button onClick={() => addElement('table', { table: { rows: 3, cols: 3, data: [["","",""],["","",""],["","",""]] } })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Tabla"><TableIcon size={22}/></button>
                     <button onClick={() => addElement('chart', { chart: { type: 'bar', labels: ["I","II","III"], datasets: [{ label: "Data", data: [100, 150, 120], color: "#3b82f6" }] } })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Estadística"><BarChart2 size={22}/></button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "center" }}>VISTA</div>
+                    <button onClick={centerView} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Centrar Vista"><Monitor size={22}/></button>
+                    <button onClick={() => setZoom(prev => Math.min(2, prev + 0.1))} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Zoom In"><ZoomIn size={22}/></button>
+                    <button onClick={() => setZoom(prev => Math.max(0.1, prev - 0.1))} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Zoom Out"><ZoomOut size={22}/></button>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: "auto" }}>
                     <StickerTool onAdd={st => addElement('image', { text: `<img src="${st}" style="width:100%;height:100%;display:block;"/>` })} />
@@ -508,7 +663,9 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                 <div 
                     ref={viewportRef}
                     onMouseDown={(e) => {
-                        if (e.ctrlKey) {
+                        // Pan if clicking on the viewport or the inner background container
+                        const isBg = e.target === viewportRef.current || e.target.classList.contains('canvas-background-container');
+                        if (isBg) {
                             setIsPanning(true);
                             setPanStart({ x: e.clientX, y: e.clientY, scrollLeft: viewportRef.current.scrollLeft, scrollTop: viewportRef.current.scrollTop });
                             viewportRef.current.style.cursor = "grabbing";
@@ -522,25 +679,50 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                             viewportRef.current.scrollTop = panStart.scrollTop - dy;
                         }
                     }}
-                    onMouseUp={() => { setIsPanning(false); viewportRef.current.style.cursor = "auto"; }}
-                    onMouseLeave={() => { setIsPanning(false); viewportRef.current.style.cursor = "auto"; }}
-                    style={{ flex: 1, position: "relative", overflow: "auto", display: "flex", justifyContent: "center", padding: "60px 50px 400px 50px", cursor: "auto" }}
+                    onMouseUp={() => { setIsPanning(false); if (viewportRef.current) viewportRef.current.style.cursor = "auto"; }}
+                    onMouseLeave={() => { setIsPanning(false); if (viewportRef.current) viewportRef.current.style.cursor = "auto"; }}
+                    className="scroll-area"
+                    style={{ 
+                        flex: 1, 
+                        position: "relative", 
+                        overflow: "auto", 
+                        display: "flex", 
+                        justifyContent: "center", 
+                        cursor: "auto",
+                        background: "var(--editor-bg)"
+                    }}
                 >
-                    <div style={{ transform: `scale(${zoom})`, transformOrigin: "top center", transition: isPanning ? "none" : "transform 0.15s ease-out" }}>
-                        <PaperCanvas size={safeData.size} orientation={safeData.orientation} background={safeData.pages[activePageIdx]?.bgUrl} onMouseDown={() => { handleSelectId(safeData.pages[activePageIdx].id); setSelectionRange(null); }}>
-                            <WorkLayer 
-                                elements={safeData.elements.filter(el => el.pageId === safeData.pages[activePageIdx].id)} 
-                                dataset={dataset}
-                                selectedId={selectedElementId} 
-                                selectedCells={selectedCells}
-                                onSelect={handleSelectId} 
-                                onSelectCells={setSelectedCells}
-                                onChange={handleUpdateElement} 
-                                selectionRange={selectionRange}
-                                onRangeSelect={setSelectionRange}
-                                onSelectionChange={handleSelectionChange}
-                            />
-                        </PaperCanvas>
+                    <div 
+                        className="canvas-background-container"
+                        style={{ 
+                            padding: "1500px", // Larger area for that "infinite" feel
+                            display: "flex", 
+                            alignItems: "flex-start", 
+                            justifyContent: "center",
+                            minWidth: "max-content",
+                            minHeight: "max-content",
+                            background: "var(--editor-bg)",
+                            backgroundImage: `radial-gradient(var(--node-border) 1px, transparent 1px)`,
+                            backgroundSize: "30px 30px"
+                        }}
+                    >
+                        <div style={{ transform: `scale(${zoom})`, transformOrigin: "top center", transition: isPanning ? "none" : "transform 0.15s ease-out" }}>
+                            <PaperCanvas size={safeData.size} orientation={safeData.orientation} background={safeData.pages[activePageIdx]?.bgUrl} onMouseDown={(e) => { if (e.target === e.currentTarget) { handleSelectId(safeData.pages[activePageIdx].id); setSelectionRange(null); } }}>
+                                <WorkLayer 
+                                    elements={safeData.elements.filter(el => el.pageId === safeData.pages[activePageIdx].id)} 
+                                    dataset={dataset && dataset.length > 0 ? [dataset[recordIdx]] : []}
+                                    selectedId={selectedElementId} 
+                                    selectedCells={selectedCells}
+                                    onSelect={handleSelectId} 
+                                    onSelectCells={setSelectedCells}
+                                    onChange={handleUpdateElement} 
+                                    zoom={zoom}
+                                    selectionRange={selectionRange}
+                                    onRangeSelect={setSelectionRange}
+                                    onSelectionChange={handleSelectionChange}
+                                />
+                            </PaperCanvas>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -630,21 +812,124 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                                         <div style={{ display: "flex", gap: 4, flex: 3 }}>
                                             <button onClick={() => {
                                                 const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'add-row');
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }}>FILA +</button>
+                                                handleTableAction(targetId, 'add-row', { r: selectedCells[0].r });
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }} title="Añadir fila arriba">FILA +</button>
                                             <button onClick={() => {
                                                 const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'del-row');
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }}>FILA -</button>
+                                                handleTableAction(targetId, 'del-row', { r: selectedCells[0].r });
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }} title="Eliminar fila actual">FILA -</button>
                                             <button onClick={() => {
                                                 const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'add-col');
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }}>COL +</button>
+                                                handleTableAction(targetId, 'add-col', { c: selectedCells[0].c });
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }} title="Añadir columna">COL +</button>
                                             <button onClick={() => {
                                                 const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'del-col');
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }}>COL -</button>
+                                                handleTableAction(targetId, 'del-col', { c: selectedCells[0].c });
+                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }} title="Eliminar columna current">COL -</button>
                                         </div>
+                                    </div>
+
+                                    <div style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #f1f5f9", paddingTop: "10px" }}>
+                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                            <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>ALTO FILA (px)</label>
+                                            <input 
+                                                type="number" 
+                                                value={(() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                    return tableEl?.table?.rowHeights?.[selectedCells[0].r] || "";
+                                                })()}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value);
+                                                    if (isNaN(val)) return;
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                    const table = tableEl?.table || {};
+                                                    const heights = [...(table.rowHeights || [])];
+                                                    const affectedRows = new Set(selectedCells.map(c => c.r));
+                                                    affectedRows.forEach(r => { heights[r] = val; });
+                                                    handleUpdateElement(targetId, { table: { ...table, rowHeights: heights } });
+                                                }}
+                                                style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                            />
+                                        </div>
+                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                             <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>ANCHO COL (px)</label>
+                                             <input 
+                                                 type="number" 
+                                                 value={(() => {
+                                                     const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                     const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                     return tableEl?.table?.colWidths?.[selectedCells[0].c] || "";
+                                                 })()}
+                                                 onChange={(e) => {
+                                                     const val = parseInt(e.target.value);
+                                                     if (isNaN(val)) return;
+                                                     const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                     const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                     const table = tableEl?.table || {};
+                                                     const widths = [...(table.colWidths || [])];
+                                                     const affectedCols = new Set(selectedCells.map(c => c.c));
+                                                     affectedCols.forEach(c => { widths[c] = val; });
+                                                     handleUpdateElement(targetId, { table: { ...table, colWidths: widths } });
+                                                 }}
+                                                 style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                             />
+                                         </div>
+                                     </div>
+
+                                     <div style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #f1f5f9", paddingTop: "10px" }}>
+                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                            <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>TOTAL FILAS</label>
+                                            <input 
+                                                type="number" 
+                                                value={(() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                    return tableEl?.table?.rows || 1;
+                                                })()}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value);
+                                                    if (isNaN(val)) return;
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    setTableStructure(targetId, 'rows', val);
+                                                }}
+                                                style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                            />
+                                        </div>
+                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                            <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>TOTAL COLS</label>
+                                            <input 
+                                                type="number" 
+                                                value={(() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                    return tableEl?.table?.cols || 1;
+                                                })()}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value);
+                                                    if (isNaN(val)) return;
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    setTableStructure(targetId, 'cols', val);
+                                                }}
+                                                style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                            />
+                                        </div>
+                                        <button 
+                                            onClick={() => {
+                                                const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                const table = tableEl?.table || {};
+                                                const styles = { ...(table.cellStyles || {}) };
+                                                selectedCells.forEach(cell => {
+                                                    const coords = `${cell.r}:${cell.c}`;
+                                                    styles[coords] = { ...(styles[coords] || {}), padding: "2px", fontSize: "11px", lineHeight: "1" };
+                                                });
+                                                handleUpdateElement(targetId, { table: { ...table, cellStyles: styles } });
+                                                showToast("Modo Compacto Aplicado");
+                                            }}
+                                            style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: "10px", fontWeight: "900", color: "#16a34a", cursor: "pointer", alignSelf: "flex-end" }}
+                                        >✨ COMPACTO</button>
                                     </div>
                                 </div>
                             )}
@@ -659,7 +944,7 @@ export default function DocumentDesigner({ data, dataset = [], onUpdate }) {
                             
                             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                                 {dataset.length > 0 ? (
-                                    Object.entries(dataset[0]).map(([key, val]) => (
+                                    Object.entries(dataset[recordIdx] || dataset[0]).map(([key, val]) => (
                                         <div key={key} style={{ padding: "16px", borderRadius: "12px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
                                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                                                 <code style={{ fontSize: 11, fontWeight: 900, color: "#3b82f6", background: "#eff6ff", padding: "4px 8px", borderRadius: 6 }}>{`{{${key}}}`}</code>

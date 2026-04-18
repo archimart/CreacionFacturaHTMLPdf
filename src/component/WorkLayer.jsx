@@ -1,5 +1,6 @@
 import React, { useState, useRef, useLayoutEffect, memo } from "react";
-import { Move, Activity, Layout, Grid } from "lucide-react";
+import { Move, Activity, Layout, Grid, BarChart3 } from "lucide-react";
+import ChartRenderer from "./Chart/ChartRenderer";
 
 // HELPER: Selection logic
 const getOffset = (root, target, offset) => {
@@ -42,7 +43,7 @@ const setSelection = (root, startOffset, endOffset) => {
   } catch(e) {}
 };
 
-const EditableNode = memo(({ el, style, isSel, dataset = [], onChange, isExport, nodeRefs, selectionStates, inTable = false }) => {
+const EditableNode = ({ el, style, isSel, dataset = [], onChange, isExport, nodeRefs, selectionStates, inTable = false }) => {
     const nodeRef = useRef(null);
     const [isFocused, setIsFocused] = useState(false);
     const s = el.style || {};
@@ -53,7 +54,13 @@ const EditableNode = memo(({ el, style, isSel, dataset = [], onChange, isExport,
         const sample = dataset[0];
         return text.replace(/\{\{(.*?)\}\}/g, (match, key) => {
             const k = key.trim();
-            return sample[k] !== undefined ? sample[k] : match;
+            // Try exact match
+            if (sample[k] !== undefined) return sample[k];
+            // Try case-insensitive match
+            const lowerK = k.toLowerCase();
+            const foundKey = Object.keys(sample).find(ok => ok.toLowerCase() === lowerK);
+            if (foundKey) return sample[foundKey];
+            return match;
         });
     };
 
@@ -99,15 +106,14 @@ const EditableNode = memo(({ el, style, isSel, dataset = [], onChange, isExport,
           onSelect={updateSelectionState}
           onInput={(e) => {
             updateSelectionState();
-            // Optional: update live if needed, but might break if we interpolate.
-            // Let's only update raw text when editing tags.
+            onChange(el.id, { text: nodeRef.current.innerHTML });
           }}
           style={{
             flex: 1, 
             display: inTable ? "block" : "flex", 
             flexDirection: inTable ? "initial" : "column",
             justifyContent: inTable ? "initial" : (s.justifyContent || "flex-start"),
-            outline: "none", padding: s.padding !== undefined ? s.padding : (inTable ? 2 : 10), minHeight: "1em",
+            outline: "none", padding: s.padding !== undefined ? s.padding : (inTable ? 2 : 10), minHeight: inTable ? 0 : "1em",
             textAlign: s.textAlign || "left", fontSize: s.fontSize || 14,
             color: s.color || "#000", fontFamily: s.fontFamily || "inherit",
             fontWeight: s.fontWeight || "400", fontStyle: s.fontStyle || "normal",
@@ -121,9 +127,9 @@ const EditableNode = memo(({ el, style, isSel, dataset = [], onChange, isExport,
           }}
         />
     );
-});
+};
 
-export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0, dataset = [], selectedId, selectedCells = [], onSelect, onSelectCells, onChange, isExport = false }) {
+export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0, dataset = [], selectedId, selectedCells = [], onSelect, onSelectCells, onChange, isExport = false, zoom = 1 }) {
   const safePages = pages.length > 0 ? pages : [{ id: "page-1", name: "PÁGINA 1" }];
   const activePage = safePages[activePageIdx] || safePages[0];
   const pageElements = elements.filter(el => !el.parentId || el.parentId === activePage.id);
@@ -141,39 +147,93 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
     const sample = dataset[0];
     return text.replace(/\{\{(.*?)\}\}/g, (match, key) => {
         const k = key.trim();
-        return sample[k] !== undefined ? sample[k] : match;
+        if (sample[k] !== undefined) return sample[k];
+        const lowerK = k.toLowerCase();
+        const foundKey = Object.keys(sample).find(ok => ok.toLowerCase() === lowerK);
+        if (foundKey) return sample[foundKey];
+        return match;
     });
   };
 
   const startDrag = (e, el, forceDrag = false) => {
     if (!forceDrag && e.target.closest('.content-editable-area')) return;
     e.preventDefault();
+    e.stopPropagation();
     setDraggingId(el.id);
-    onSelect?.(el.id);
-    onSelectCells?.([]);
-    dragOffset.current = { x: e.clientX - (el.x || 0), y: e.clientY - (el.y || 0) };
+    onSelect(el.id);
+    
+    const z = parseFloat(zoom) || 1;
+    const initialDragOffset = { x: e.clientX / z - (el.x || 0), y: e.clientY / z - (el.y || 0) };
+
+    const onMove = (moveEvent) => {
+      onChange(el.id, { x: moveEvent.clientX / z - initialDragOffset.x, y: moveEvent.clientY / z - initialDragOffset.y });
+    };
+
+    const onUp = () => {
+      setDraggingId(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   const startResize = (e, el, dir) => {
     e.preventDefault();
     e.stopPropagation();
-    setResizing({ id: el.id, dir, startX: e.clientX, startY: e.clientY, startW: el.w || 100, startH: el.h || 50, startPX: el.x || 0, startPY: el.y || 0 });
-  };
+    setResizing({ id: el.id, dir });
+    
+    const z = parseFloat(zoom) || 1;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = el.w || 100;
+    const startH = el.h || 50;
+    const startPX = el.x || 0;
+    const startPY = el.y || 0;
 
-  const handleMouseMove = (e) => {
-    if (draggingId) {
-      onChange(draggingId, { x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y });
-    } else if (resizing) {
-      const { id, dir, startX, startY, startW, startH, startPX, startPY } = resizing;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+    const onMove = (moveEvent) => {
+      const dx = (moveEvent.clientX - startX) / z;
+      const dy = (moveEvent.clientY - startY) / z;
       const patch = {};
-      if (dir.includes('r')) patch.w = Math.max(20, startW + dx);
-      if (dir.includes('b')) patch.h = Math.max(20, startH + dy);
-      if (dir.includes('l')) { const newW = Math.max(20, startW - dx); patch.w = newW; patch.x = startPX + (startW - newW); }
-      if (dir.includes('t')) { const newH = Math.max(20, startH - dy); patch.h = newH; patch.y = startPY + (startH - newH); }
-      onChange(id, patch);
-    }
+      const isTable = el.type === 'table';
+
+      if (dir.includes('r')) patch.w = Math.max(2, startW + dx);
+      if (dir.includes('b')) patch.h = Math.max(2, startH + dy);
+      if (dir.includes('l')) { const newW = Math.max(2, startW - dx); patch.w = newW; patch.x = startPX + (startW - newW); }
+      if (dir.includes('t')) { const newH = Math.max(2, startH - dy); patch.h = newH; patch.y = startPY + (startH - newH); }
+
+      if (isTable && el.table) {
+        const table = { ...el.table };
+        let modifiedTable = false;
+        const rows = table.rows || 1;
+        const cols = table.cols || 1;
+
+        if (patch.w !== undefined && startW > 0) {
+          const scaleX = patch.w / startW;
+          const currentWidths = table.colWidths || Array(cols).fill(startW / cols);
+          table.colWidths = currentWidths.map(w => Math.round(w * scaleX));
+          modifiedTable = true;
+        }
+        if (patch.h !== undefined && startH > 0) {
+          const scaleY = patch.h / startH;
+          const currentHeights = table.rowHeights || Array(rows).fill(startH / rows);
+          table.rowHeights = currentHeights.map(h => Math.round(h * scaleY));
+          modifiedTable = true;
+        }
+        if (modifiedTable) patch.table = table;
+      }
+      onChange(el.id, patch);
+    };
+
+    const onUp = () => {
+      setResizing(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   const handleMouseUp = () => { setDraggingId(null); setResizing(null); setCellSelectionStart(null); };
@@ -194,14 +254,60 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
         const isMerged = (r, c) => merges.some(m => r >= m.r && r < m.r + m.rs && c >= m.c && c < m.c + m.cs && (r !== m.r || c !== m.c));
         const getMergeInfo = (r, c) => merges.find(m => m.r === r && m.c === c);
 
+        const startResizeTable = (type, index, e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const z = parseFloat(zoom) || 1;
+            const startPos = type === 'col' ? e.clientX : e.clientY;
+            const baseSize = type === 'col' ? (el.table?.colWidths?.[index] || (el.w || 100) / cols) : (el.table?.rowHeights?.[index] || (el.h || 50) / rows);
+            const baseTableW = el.w || 100;
+            const baseTableH = el.h || 50;
+            
+            const onMove = (moveEvent) => {
+                const delta = ((type === 'col' ? moveEvent.clientX : moveEvent.clientY) - startPos) / z;
+                const newSize = Math.max(2, baseSize + delta);
+                const sizeDiff = newSize - baseSize;
+                
+                if (type === 'col') {
+                    const nextWidths = [...(el.table?.colWidths || Array(cols).fill(baseTableW / cols))];
+                    nextWidths[index] = newSize;
+                    onChange?.(el.id, { 
+                        w: Math.max(2, baseTableW + sizeDiff),
+                        table: { ...el.table, colWidths: nextWidths } 
+                    });
+                } else {
+                    const nextHeights = [...(el.table?.rowHeights || Array(rows).fill(baseTableH / rows))];
+                    nextHeights[index] = newSize;
+                    onChange?.(el.id, { 
+                        h: Math.max(2, baseTableH + sizeDiff),
+                        table: { ...el.table, rowHeights: nextHeights } 
+                    });
+                }
+            };
+
+            const onUp = () => {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                document.body.style.cursor = 'default';
+            };
+
+            document.body.style.cursor = type === 'col' ? 'col-resize' : 'row-resize';
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        };
+
         nodeContent = (
+            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             <table style={{ 
                 width: '100%', height: '100%', 
                 borderCollapse: 'separate', 
                 borderSpacing: 0,
                 tableLayout: 'fixed', 
                 background: s.background || 'transparent',
-                border: (s.borderWidth ? `${s.borderWidth} ${s.borderStyle || 'solid'} ${s.borderColor || '#000'}` : 'none'),
+                borderTop: (s.borderWidth ? `${s.borderWidth} ${s.borderStyle || 'solid'} ${s.borderColor || '#000'}` : '1px solid #94a3b8'),
+                borderLeft: (s.borderWidth ? `${s.borderWidth} ${s.borderStyle || 'solid'} ${s.borderColor || '#000'}` : '1px solid #94a3b8'),
+                borderRight: 'none',
+                borderBottom: 'none',
                 borderRadius: s.borderRadius || 0,
                 overflow: 'visible'
             }}>
@@ -219,46 +325,14 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
                                 // Initialize widths/heights if missing
                                 const colWidths = el.table?.colWidths || Array(cols).fill((el.w || 100) / cols);
                                 const rowHeights = el.table?.rowHeights || Array(rows).fill((el.h || 50) / rows);
-                                
-                                const startResize = (type, index, e) => {
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    const startPos = type === 'col' ? e.clientX : e.clientY;
-                                    const baseSize = type === 'col' ? colWidths[index] : rowHeights[index];
-                                    
-                                    const onMove = (moveEvent) => {
-                                        const delta = (type === 'col' ? moveEvent.clientX : moveEvent.clientY) - startPos;
-                                        const newSize = Math.max(20, baseSize + delta);
-                                        
-                                        if (type === 'col') {
-                                            const nextWidths = [...colWidths];
-                                            nextWidths[index] = newSize;
-                                            onChange?.(el.id, { table: { ...el.table, colWidths: nextWidths } });
-                                        } else {
-                                            const nextHeights = [...rowHeights];
-                                            nextHeights[index] = newSize;
-                                            onChange?.(el.id, { table: { ...el.table, rowHeights: nextHeights } });
-                                        }
-                                    };
-                                    
-                                    const onUp = () => {
-                                        window.removeEventListener('mousemove', onMove);
-                                        window.removeEventListener('mouseup', onUp);
-                                        document.body.style.cursor = 'default';
-                                    };
-                                    
-                                    document.body.style.cursor = type === 'col' ? 'col-resize' : 'row-resize';
-                                    window.addEventListener('mousemove', onMove);
-                                    window.addEventListener('mouseup', onUp);
-                                };
+                                const cellS = cellStyles[`${r}:${c}`] || {};
 
                                 return (
                                     <td 
-                                      key={c} 
+                                      key={c}
                                       rowSpan={m?.rs || 1}
                                       colSpan={m?.cs || autoColSpan}
                                       onMouseDown={(e) => { 
-                                          // Skip if clicking a handle
                                           if (e.target.dataset.resizer) return;
                                           e.stopPropagation(); 
                                           onSelect?.(id);
@@ -285,62 +359,34 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
                                       style={{ 
                                           width: colWidths[c],
                                           height: rowHeights[r],
-                                          borderBottom: (r === rows - 1) ? 'none' : (cellStyles[`${r}:${c}`]?.borderWidth ? `${cellStyles[`${r}:${c}`].borderWidth} ${cellStyles[`${r}:${c}`].borderStyle || 'solid'} ${cellStyles[`${r}:${c}`].borderColor || '#000'}` : '1px solid #ccc'), 
-                                          borderRight: (c === cols - 1) ? 'none' : (cellStyles[`${r}:${c}`]?.borderWidth ? `${cellStyles[`${r}:${c}`].borderWidth} ${cellStyles[`${r}:${c}`].borderStyle || 'solid'} ${cellStyles[`${r}:${c}`].borderColor || '#000'}` : '1px solid #ccc'),
-                                          borderTop: (r === 0 && parseFloat(s.borderWidth||0) === 0) ? (cellStyles[`${r}:${c}`]?.borderWidth ? `${cellStyles[`${r}:${c}`].borderWidth} ${cellStyles[`${r}:${c}`].borderStyle || 'solid'} ${cellStyles[`${r}:${c}`].borderColor || '#000'}` : '1px solid #ccc') : 'none',
-                                          borderLeft: (c === 0 && parseFloat(s.borderWidth||0) === 0) ? (cellStyles[`${r}:${c}`]?.borderWidth ? `${cellStyles[`${r}:${c}`].borderWidth} ${cellStyles[`${r}:${c}`].borderStyle || 'solid'} ${cellStyles[`${r}:${c}`].borderColor || '#000'}` : '1px solid #ccc') : 'none',
-                                          padding: 0, 
+                                          borderRight: (cellS.borderWidth ? `${cellS.borderWidth} ${cellS.borderStyle || 'solid'} ${cellS.borderColor || '#000'}` : (s.borderWidth ? `${s.borderWidth} ${s.borderStyle || 'solid'} ${s.borderColor || '#000'}` : '1px solid #94a3b8')),
+                                          borderBottom: (cellS.borderWidth ? `${cellS.borderWidth} ${cellS.borderStyle || 'solid'} ${cellS.borderColor || '#000'}` : (s.borderWidth ? `${s.borderWidth} ${s.borderStyle || 'solid'} ${s.borderColor || '#000'}` : '1px solid #94a3b8')),
+                                          padding: cellS.padding || 0, 
                                           position: 'relative', 
-                                          boxShadow: isCellSel ? 'inset 0 0 0 1px #3b82f6' : 'none', 
+                                          boxShadow: isCellSel ? 'inset 0 0 0 2px #3b82f6' : 'none', 
                                           zIndex: isCellSel ? 10 : 1, 
-                                          verticalAlign: ((cellStyles[`${r}:${c}`] || {}).verticalAlign || (cellStyles[`${r}:${c}`] || {}).justifyContent === 'center' ? 'middle' : (cellStyles[`${r}:${c}`] || {}).justifyContent === 'flex-end' ? 'bottom' : 'top'), 
-                                          ...(cellStyles[`${r}:${c}`] || {}) 
+                                          verticalAlign: (cellS.verticalAlign || (cellS.justifyContent === 'center' ? 'middle' : (cellS.justifyContent === 'flex-end' ? 'bottom' : 'top'))), 
+                                          boxSizing: 'border-box',
+                                          overflow: 'hidden',
+                                          background: cellS.background || 'transparent',
+                                          color: cellS.color,
+                                          fontSize: cellS.fontSize,
+                                          fontWeight: cellS.fontWeight,
+                                          textAlign: cellS.textAlign || 'center',
+                                          ...(cellS.border ? { border: cellS.border } : {})
                                       }}
                                     >
                                         <div style={{ width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
                                             {cellTexts[`${r}:${c}`]?.match(/^https?:\/\/.*?\.(png|jpg|jpeg|gif|svg|webp)/i) || cellTexts[`${r}:${c}`]?.startsWith('data:image') ? (
-                                                <img src={cellTexts[`${r}:${c}`]} style={{ width: '100%', height: '100%', objectFit: (cellStyles[`${r}:${c}`] || {}).objectFit || 'contain' }} alt="" />
+                                                <img src={cellTexts[`${r}:${c}`]} style={{ width: '100%', height: '100%', objectFit: cellS.objectFit || 'contain' }} alt="" />
                                             ) : (
-                                                <EditableNode el={{ id, text: cellTexts[`${r}:${c}`] || "", style: cellStyles[`${r}:${c}`] || {} }} isSel={selectedId === id} dataset={dataset} isExport={isExport} nodeRefs={nodeRefs} selectionStates={selectionStates} inTable={true} onChange={(cid, p) => {
-                                                    const newTexts = { ...cellTexts }; newTexts[`${r}:${c}`] = p.text;
+                                                <EditableNode el={{ id, text: cellTexts[`${r}:${c}`] || "", style: cellS }} isSel={selectedId === id} dataset={dataset} isExport={isExport} nodeRefs={nodeRefs} selectionStates={selectionStates} inTable={true} onChange={(cid, p) => {
+                                                    const newTexts = { ...cellTexts }; 
+                                                    newTexts[`${r}:${c}`] = p.text;
                                                     onChange(el.id, { table: { ...el.table, cellTexts: newTexts } });
                                                 }} />
                                             )}
                                         </div>
-                                        
-                                        {/* Resize Handles */}
-                                        {!isExport && selectedId === el.id && (
-                                            <>
-                                                <div 
-                                                    data-resizer="col"
-                                                    onMouseDown={(e) => startResize('col', c, e)}
-                                                    className="table-resizer-handle-col"
-                                                    style={{ 
-                                                        position: 'absolute', right: 0, top: 0, bottom: 0, width: 4, 
-                                                        cursor: 'col-resize', zIndex: 100,
-                                                        background: 'transparent',
-                                                        transition: 'background 0.2s',
-                                                        borderRight: '1.5px solid rgba(59, 130, 246, 0.5)'
-                                                    }}
-                                                    onMouseEnter={(e) => e.target.style.background = 'rgba(59, 130, 246, 0.4)'}
-                                                    onMouseLeave={(e) => e.target.style.background = 'transparent'}
-                                                />
-                                                <div 
-                                                    data-resizer="row"
-                                                    onMouseDown={(e) => startResize('row', r, e)}
-                                                    className="table-resizer-handle-row"
-                                                    style={{ 
-                                                        position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, 
-                                                        cursor: 'row-resize', zIndex: 100,
-                                                        background: 'transparent',
-                                                        transition: 'background 0.2s',
-                                                        borderBottom: '1.5px solid rgba(59, 130, 246, 0.5)'
-                                                    }}
-                                                    onMouseEnter={(e) => e.target.style.background = 'rgba(59, 130, 246, 0.4)'}
-                                                    onMouseLeave={(e) => e.target.style.background = 'transparent'}
-                                                />
-                                            </>
-                                        )}
                                     </td>
                                 );
                             })}
@@ -348,13 +394,60 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
                     ))}
                 </tbody>
             </table>
-        );
-    } else if (el.type === "chart") {
-        nodeContent = (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#f8fafc", borderRadius: 8 }}>
-                <Activity size={32} color="#64748b" />
+
+             {/* Table Resize Overlay */}
+             {!isExport && (selectedId === el.id || selectedId?.startsWith(`${el.id}:cell:`)) && (
+                <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                    {/* Column Resizers */}
+                    {(() => {
+                        let currentX = 0;
+                        return (el.table?.colWidths || Array(cols).fill((el.w || 100) / cols)).map((cw, idx) => {
+                            currentX += cw;
+                            return (
+                                <div 
+                                    key={`col-${idx}`}
+                                    onMouseDown={(e) => startResizeTable('col', idx, e)}
+                                    style={{ 
+                                        position: 'absolute', left: currentX - 3, top: 0, bottom: 0, width: 6, 
+                                        cursor: 'col-resize', zIndex: 1000, pointerEvents: 'auto',
+                                        background: 'transparent'
+                                    }}
+                                    onMouseEnter={(e) => { e.target.firstChild.style.opacity = '1'; }}
+                                    onMouseLeave={(e) => { e.target.firstChild.style.opacity = '0'; }}
+                                >
+                                    <div style={{ position: 'absolute', left: 3, top: 0, bottom: 0, width: 1, background: '#3b82f6', opacity: 0, transition: 'opacity 0.2s' }} />
+                                </div>
+                            );
+                        });
+                    })()}
+                    {/* Row Resizers */}
+                    {(() => {
+                        let currentY = 0;
+                        return (el.table?.rowHeights || Array(rows).fill((el.h || 50) / rows)).map((ch, idx) => {
+                            currentY += ch;
+                            return (
+                                <div 
+                                    key={`row-${idx}`}
+                                    onMouseDown={(e) => startResizeTable('row', idx, e)}
+                                    style={{ 
+                                        position: 'absolute', top: currentY - 3, left: 0, right: 0, height: 6, 
+                                        cursor: 'row-resize', zIndex: 1000, pointerEvents: 'auto',
+                                        background: 'transparent'
+                                    }}
+                                    onMouseEnter={(e) => { e.target.firstChild.style.opacity = '1'; }}
+                                    onMouseLeave={(e) => { e.target.firstChild.style.opacity = '0'; }}
+                                >
+                                    <div style={{ position: 'absolute', top: 3, left: 0, right: 0, height: 1, background: '#3b82f6', opacity: 0, transition: 'opacity 0.2s' }} />
+                                </div>
+                            );
+                        });
+                    })()}
+                </div>
+             )}
             </div>
         );
+    } else if (el.type === "chart") {
+        nodeContent = <ChartRenderer el={el} dataset={dataset} />;
     } else {
         nodeContent = <EditableNode el={el} isSel={isSel} dataset={dataset} isExport={isExport} nodeRefs={nodeRefs} selectionStates={selectionStates} onChange={onChange} />;
     }
@@ -425,7 +518,7 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
   })();
 
   return (
-    <div onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} style={{ position: "relative", width: "100%", height: "100%" }}>
       {pageElements.map(renderNode)}
       
       {!isExport && selectedCells.length >= 2 && !cellSelectionStart && (

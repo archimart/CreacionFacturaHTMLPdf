@@ -6,24 +6,24 @@ import {
     Palette, Smartphone, ChevronDown, ChevronUp, Activity,
     ArrowUpDown, Sparkles, Layers, Move, Scissors, TextCursor,
     AlignVerticalJustifyCenter, AlignVerticalJustifyStart, AlignVerticalJustifyEnd,
-    List, ListOrdered, Indent, Outdent, LayoutTemplate
+    List, ListOrdered, Indent, Outdent, LayoutTemplate, BarChart3, PieChart, Activity as AreaChart
 } from 'lucide-react';
 
 const Section = ({ id, label, icon: Icon, children, activeAccordion, setActiveAccordion }) => {
     const isOpen = activeAccordion === id;
     return (
-        <div style={{ borderBottom: "1px solid #f1f5f9" }}>
+        <div style={{ borderBottom: "1px solid var(--panel-border)" }}>
             <button
                 onClick={() => setActiveAccordion(isOpen ? "" : id)}
-                style={{ width: "100%", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", background: isOpen ? "#f8fafc" : "white", border: "none", cursor: "pointer", transition: "all 0.2s" }}
+                style={{ width: "100%", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", background: isOpen ? "var(--editor-sidebar)" : "var(--panel-bg)", border: "none", cursor: "pointer", transition: "all 0.2s" }}
             >
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <Icon size={16} color={isOpen ? "#3b82f6" : "#64748b"} />
-                    <span style={{ fontSize: "11px", fontWeight: 700, color: isOpen ? "#1e293b" : "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</span>
+                    <Icon size={16} color={isOpen ? "#3b82f6" : "var(--node-desc)"} />
+                    <span style={{ fontSize: "11px", fontWeight: 700, color: isOpen ? "var(--node-text)" : "var(--node-desc)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</span>
                 </div>
-                {isOpen ? <ChevronUp size={14} color="#94a3b8" /> : <ChevronDown size={14} color="#94a3b8" />}
+                {isOpen ? <ChevronUp size={14} color="var(--node-desc)" /> : <ChevronDown size={14} color="var(--node-desc)" />}
             </button>
-            {isOpen && <div style={{ padding: "16px", background: "white" }}>{children}</div>}
+            {isOpen && <div style={{ padding: "16px", background: "var(--panel-bg)" }}>{children}</div>}
         </div>
     );
 };
@@ -33,9 +33,9 @@ const ActionButton = ({ onClick, icon: Icon, label, disabled, primary }) => (
         onClick={onClick}
         disabled={disabled}
         style={{
-            flex: 1, padding: "18px 12px", borderRadius: "16px", border: primary ? "none" : "1px solid #e2e8f0",
-            background: primary ? (disabled ? "#f1f5f9" : "#3b82f6") : "white",
-            color: primary ? (disabled ? "#94a3b8" : "white") : "#475569",
+            flex: 1, padding: "18px 12px", borderRadius: "16px", border: primary ? "none" : "1px solid var(--panel-border)",
+            background: primary ? (disabled ? "var(--editor-sidebar)" : "#3b82f6") : "var(--panel-bg)",
+            color: primary ? (disabled ? "var(--node-desc)" : "white") : "var(--node-text)",
             fontSize: "11px", fontWeight: "900", cursor: disabled ? "not-allowed" : "pointer",
             display: "flex", flexDirection: "column", alignItems: "center", gap: 12,
             transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -49,7 +49,7 @@ const ActionButton = ({ onClick, icon: Icon, label, disabled, primary }) => (
 );
 
 export default function PropertiesPanel({ el, selectedCells = [], onStyle, onChange, onDelete, selectionRange }) {
-    const [activeAccordion, setActiveAccordion] = useState("text");
+    const [activeAccordion, setActiveAccordion] = useState(el?.type === 'chart' ? 'chart' : "text");
     const [formatState, setFormatState] = useState({
         bold: false, italic: false, underline: false, strike: false,
         align: 'left', bullet: false, number: false
@@ -112,8 +112,8 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
     }, [s.fontSize, s.boxShadow, el?.id]);
 
     if (!el) return (
-        <div style={{ width: 300, background: "#f8fafc", borderLeft: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
-            <p style={{ color: "#94a3b8", fontStyle: "italic", fontSize: "13px" }}>Selecciona un elemento para editar</p>
+        <div style={{ width: 300, background: "var(--editor-sidebar)", borderLeft: "1px solid var(--editor-border)", display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <p style={{ color: "var(--node-desc)", fontStyle: "italic", fontSize: "13px" }}>Selecciona un elemento para editar</p>
         </div>
     );
 
@@ -187,23 +187,106 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
     };
 
     return (
-        <div style={{ width: 300, background: "white", borderLeft: "1px solid #e2e8f0", display: "flex", flexDirection: "column", height: "100%", boxShadow: "-4px 0 15px rgba(0,0,0,0.05)" }}>
+        <div style={{ width: 300, background: "var(--panel-bg)", borderLeft: "1px solid var(--editor-border)", display: "flex", flexDirection: "column", height: "100%", boxShadow: "-4px 0 15px rgba(0,0,0,0.05)" }}>
             {/* Header */}
-            <div style={{ padding: "16px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc" }}>
+            <div style={{ padding: "16px", borderBottom: "1px solid var(--panel-border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--editor-sidebar)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <div style={{ width: 32, height: 32, borderRadius: 8, background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", color: "white" }}>
                         <Settings2 size={16} />
                     </div>
-                    <h2 style={{ fontSize: "14px", fontWeight: 800, color: "#1e293b", margin: 0 }}>AJUSTES</h2>
+                    <h2 style={{ fontSize: "14px", fontWeight: 800, color: "var(--node-text)", margin: 0 }}>AJUSTES</h2>
                 </div>
-                <button onClick={onDelete} style={{ border: "none", background: "transparent", color: "#94a3b8", cursor: "pointer", padding: 8 }} title="Eliminar">
+                <button onClick={onDelete} style={{ border: "none", background: "transparent", color: "var(--node-desc)", cursor: "pointer", padding: 8 }} title="Eliminar">
                     <Trash2 size={18} />
                 </button>
             </div>
 
             <div style={{ flex: 1, overflowY: "auto" }}>
-                {/* TABLE ACTIONS (Priority) */}
-                {/* REMOVED: Redundant table actions, moved to bottom assistant bar to save space */}
+                {/* CHART SETTINGS */}
+                {el.type === 'chart' && (
+                    <Section id="chart" label="Configuración de Gráfica" icon={BarChart3} activeAccordion={activeAccordion} setActiveAccordion={setActiveAccordion}>
+                        <div style={{ marginBottom: 16 }}>
+                            <label style={{ fontSize: "10px", fontWeight: 700, color: "var(--node-desc)", display: "block", marginBottom: 6 }}>TIPO DE GRÁFICA</label>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                                {[
+                                    { id: 'bar', icon: BarChart3, label: 'Barras' },
+                                    { id: 'line', icon: AreaChart, label: 'Línea' },
+                                    { id: 'area', icon: LayoutTemplate, label: 'Área' },
+                                    { id: 'pie', icon: PieChart, label: 'Pastel' },
+                                    { id: 'donut', icon: PieChart, label: 'Donut' }
+                                ].map(t => (
+                                    <button
+                                        key={t.id}
+                                        onClick={() => handleUpdate({ chart: { ...(el.chart || {}), type: t.id } })}
+                                        style={{
+                                            padding: "8px", borderRadius: 8, border: el.chart?.type === t.id ? "1.5px solid #3b82f6" : "1px solid var(--panel-border)",
+                                            background: el.chart?.type === t.id ? "#eff6ff" : "var(--panel-bg)",
+                                            display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer",
+                                            color: el.chart?.type === t.id ? "#3b82f6" : "var(--node-text)"
+                                        }}
+                                    >
+                                        <t.icon size={18} />
+                                        <span style={{ fontSize: '9px', fontWeight: 'bold' }}>{t.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: 12 }}>
+                            <label style={{ fontSize: "10px", fontWeight: 700, color: "var(--node-desc)", display: "block", marginBottom: 6 }}>VÍNCULO DE DATOS (MAPPING)</label>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                <div>
+                                    <span style={{ fontSize: '9px', color: 'var(--node-desc)', fontWeight: 800 }}>ETIQUETA (Labels)</span>
+                                    <select
+                                        value={el.chart?.mapping?.labelField || ""}
+                                        onChange={(e) => handleUpdate({ chart: { ...(el.chart || {}), mapping: { ...(el.chart?.mapping || {}), labelField: e.target.value } } })}
+                                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1px solid var(--panel-border)", fontSize: "11px", background: "var(--input-bg)", color: "var(--input-text)" }}
+                                    >
+                                        <option value="">Seleccionar Campo...</option>
+                                        {Object.keys(window.__EDITOR_DATASET__?.[0] || {}).map(k => <option key={k} value={k}>{k}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <span style={{ fontSize: '9px', color: 'var(--node-desc)', fontWeight: 800 }}>VALOR (Data)</span>
+                                    <select
+                                        value={el.chart?.mapping?.dataField || ""}
+                                        onChange={(e) => handleUpdate({ chart: { ...(el.chart || {}), mapping: { ...(el.chart?.mapping || {}), dataField: e.target.value } } })}
+                                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1px solid var(--panel-border)", fontSize: "11px", background: "var(--input-bg)", color: "var(--input-text)" }}
+                                    >
+                                        <option value="">Seleccionar Campo...</option>
+                                        {Object.keys(window.__EDITOR_DATASET__?.[0] || {}).map(k => <option key={k} value={k}>{k}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <span style={{ fontSize: '9px', color: 'var(--node-desc)', fontWeight: 800 }}>LÍMITE REGISTROS</span>
+                                    <input 
+                                        type="number" 
+                                        min="1" max="50"
+                                        value={el.chart?.mapping?.limit || 10}
+                                        onChange={(e) => handleUpdate({ chart: { ...(el.chart || {}), mapping: { ...(el.chart?.mapping || {}), limit: parseInt(e.target.value) } } })}
+                                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1px solid var(--panel-border)", fontSize: "11px", background: "var(--input-bg)", color: "var(--input-text)" }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: 12 }}>
+                            <label style={{ fontSize: "10px", fontWeight: 700, color: "var(--node-desc)", display: "block", marginBottom: 6 }}>COLOR PRINCIPAL</label>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                {['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#000000'].map(c => (
+                                    <button
+                                        key={c}
+                                        onClick={() => handleUpdate({ chart: { ...(el.chart || {}), datasets: [{ ...(el.chart?.datasets?.[0] || {}), color: c }] } })}
+                                        style={{
+                                            width: 24, height: 24, borderRadius: "50%", border: el.chart?.datasets?.[0]?.color === c ? "2px solid #3b82f6" : "2px solid var(--panel-bg)",
+                                            boxShadow: "0 0 0 1px var(--panel-border)", background: c, cursor: "pointer"
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    </Section>
+                )}
 
                 {/* TEXT & FORMAT */}
                 <Section id="text" label="Fuente y Texto" icon={Type} activeAccordion={activeAccordion} setActiveAccordion={setActiveAccordion}>
@@ -224,10 +307,10 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
                                         handleUpdate({ text: document.querySelector(`[data-id="${el.id}"]`)?.innerHTML });
                                     }}
                                     style={{
-                                        width: 34, height: 34, borderRadius: 8, border: isActive ? "1px solid #3b82f6" : "1px solid #e2e8f0",
-                                        background: isActive ? "#eff6ff" : "white",
+                                        width: 34, height: 34, borderRadius: 8, border: isActive ? "1px solid #3b82f6" : "1px solid var(--panel-border)",
+                                        background: isActive ? "#eff6ff" : "var(--panel-bg)",
                                         display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-                                        color: isActive ? "#3b82f6" : "#475569", transition: "all 0.2s"
+                                        color: isActive ? "#3b82f6" : "var(--node-text)", transition: "all 0.2s"
                                     }}
                                 >
                                     <btn.icon size={16} />
@@ -236,17 +319,17 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
                         })}
 
                         {/* Case Toggle */}
-                        <button
+                         <button
                             onClick={() => {
                                 const current = s.textTransform || 'none';
                                 const next = current === 'uppercase' ? 'lowercase' : current === 'lowercase' ? 'capitalize' : current === 'capitalize' ? 'none' : 'uppercase';
                                 handleStyle({ textTransform: next });
                             }}
                             style={{
-                                width: 34, height: 34, borderRadius: 8, border: s.textTransform && s.textTransform !== 'none' ? "1px solid #3b82f6" : "1px solid #e2e8f0",
-                                background: s.textTransform && s.textTransform !== 'none' ? "#eff6ff" : "white",
+                                width: 34, height: 34, borderRadius: 8, border: s.textTransform && s.textTransform !== 'none' ? "1px solid #3b82f6" : "1px solid var(--panel-border)",
+                                background: s.textTransform && s.textTransform !== 'none' ? "#eff6ff" : "var(--panel-bg)",
                                 display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-                                color: s.textTransform && s.textTransform !== 'none' ? "#3b82f6" : "#475569", fontSize: '10px', fontWeight: 'bold'
+                                color: s.textTransform && s.textTransform !== 'none' ? "#3b82f6" : "var(--node-text)", fontSize: '10px', fontWeight: 'bold'
                             }}
                             title="Cambiar Mayúsculas"
                         >
@@ -303,10 +386,10 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
                                         handleStyle({ textAlign: btn.key === 'justify' ? 'justify' : btn.key });
                                     }}
                                     style={{
-                                        width: 34, height: 34, borderRadius: 8, border: isActive ? "1px solid #3b82f6" : "1px solid #e2e8f0",
-                                        background: isActive ? "#eff6ff" : "white",
+                                        width: 34, height: 34, borderRadius: 8, border: isActive ? "1px solid #3b82f6" : "1px solid var(--panel-border)",
+                                        background: isActive ? "#eff6ff" : "var(--panel-bg)",
                                         display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-                                        color: isActive ? "#3b82f6" : "#475569", transition: "all 0.2s"
+                                        color: isActive ? "#3b82f6" : "var(--node-text)", transition: "all 0.2s"
                                     }}
                                     title={btn.title}
                                 >
@@ -340,7 +423,7 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
                                     handleStyle({ fontFamily: val });
                                 }
                             }}
-                            style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #e2e8f0", fontSize: "12px", background: "#f8fafc" }}
+                            style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid var(--panel-border)", fontSize: "12px", background: "var(--input-bg)", color: "var(--input-text)" }}
                         >
                             {fonts.map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
@@ -371,7 +454,7 @@ export default function PropertiesPanel({ el, selectedCells = [], onStyle, onCha
                                         }
                                     }
                                 }}
-                                style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid #e2e8f0", fontSize: "12px", background: "#f8fafc" }}
+                                style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1px solid var(--panel-border)", fontSize: "12px", background: "var(--input-bg)", color: "var(--input-text)" }}
                             />
                         </div>
                     </div>

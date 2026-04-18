@@ -3,7 +3,7 @@ import { Database, FileSpreadsheet, Braces, UploadCloud, Table, Settings, Play, 
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 
-export default function DatabaseNodeEditor({ data = {}, onUpdate }) {
+export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
   const [activeTab, setActiveTab] = useState(data.sourceType || 'excel');
   const [records, setRecords] = useState(data.records || []);
   const [dbConfig, setDbConfig] = useState(data.dbConfig || { type: 'postgres', host: 'localhost', user: 'postgres', pass: '******', dbName: 'facturas_db', query: 'SELECT * FROM clientes LIMIT 50' });
@@ -101,18 +101,18 @@ export default function DatabaseNodeEditor({ data = {}, onUpdate }) {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%', width: '100%', background: '#fff', color: '#1e293b' }}>
+    <div style={{ display: 'flex', height: '100%', width: '100%', background: 'var(--panel-bg)', color: 'var(--node-text)' }}>
       
       {/* SIDEBAR TABS */}
-      <div style={{ width: 220, background: '#f8fafc', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: 20, fontWeight: 900, fontSize: 12, borderBottom: '1px solid #e2e8f0', color: '#64748b' }}>ORIGEN DE DATOS</div>
-          <button onClick={() => setActiveTab('excel')} style={{ padding: '15px 20px', border: 'none', background: activeTab === 'excel' ? '#fff' : 'transparent', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: activeTab === 'excel' ? 800 : 600, borderLeft: activeTab === 'excel' ? '4px solid #3b82f6' : '4px solid transparent' }}>
+      <div style={{ width: 220, background: 'var(--editor-sidebar)', borderRight: '1px solid var(--editor-border)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: 20, fontWeight: 900, fontSize: 12, borderBottom: '1px solid var(--editor-border)', color: 'var(--node-desc)' }}>ORIGEN DE DATOS</div>
+          <button onClick={() => setActiveTab('excel')} style={{ padding: '15px 20px', border: 'none', background: activeTab === 'excel' ? 'var(--panel-bg)' : 'transparent', color: 'var(--node-text)', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: activeTab === 'excel' ? 800 : 600, borderLeft: activeTab === 'excel' ? '4px solid #3b82f6' : '4px solid transparent' }}>
               <FileSpreadsheet size={18} /> Excel / CSV
           </button>
-          <button onClick={() => setActiveTab('json')} style={{ padding: '15px 20px', border: 'none', background: activeTab === 'json' ? '#fff' : 'transparent', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: activeTab === 'json' ? 800 : 600, borderLeft: activeTab === 'json' ? '4px solid #3b82f6' : '4px solid transparent' }}>
+          <button onClick={() => setActiveTab('json')} style={{ padding: '15px 20px', border: 'none', background: activeTab === 'json' ? 'var(--panel-bg)' : 'transparent', color: 'var(--node-text)', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: activeTab === 'json' ? 800 : 600, borderLeft: activeTab === 'json' ? '4px solid #3b82f6' : '4px solid transparent' }}>
               <Braces size={18} /> JSON Directo
           </button>
-          <button onClick={() => setActiveTab('db')} style={{ padding: '15px 20px', border: 'none', background: activeTab === 'db' ? '#fff' : 'transparent', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: activeTab === 'db' ? 800 : 600, borderLeft: activeTab === 'db' ? '4px solid #3b82f6' : '4px solid transparent' }}>
+          <button onClick={() => setActiveTab('db')} style={{ padding: '15px 20px', border: 'none', background: activeTab === 'db' ? 'var(--panel-bg)' : 'transparent', color: 'var(--node-text)', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: activeTab === 'db' ? 800 : 600, borderLeft: activeTab === 'db' ? '4px solid #3b82f6' : '4px solid transparent' }}>
               <Database size={18} /> Base Datos SQL
           </button>
           
@@ -142,7 +142,7 @@ export default function DatabaseNodeEditor({ data = {}, onUpdate }) {
                   </div>
                   <textarea 
                     value={jsonText} onChange={e => setJsonText(e.target.value)}
-                    style={{ flex: 1, width: '100%', minHeight: 400, fontFamily: 'monospace', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 13 }} 
+                    style={{ flex: 1, width: '100%', minHeight: 400, fontFamily: 'monospace', padding: 20, borderRadius: 12, border: '1px solid var(--editor-border)', background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 13 }} 
                   />
               </div>
           )}
@@ -151,17 +151,17 @@ export default function DatabaseNodeEditor({ data = {}, onUpdate }) {
               <div>
                    <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 25 }}>Conexión SQL</h2>
                    <div style={{ display: 'flex', gap: 15, marginBottom: 30 }}>
-                       <div style={{ flex: 1, height: 4, background: step >= 1 ? '#3b82f6' : '#e2e8f0', borderRadius: 2 }} />
-                       <div style={{ flex: 1, height: 4, background: step >= 2 ? '#3b82f6' : '#e2e8f0', borderRadius: 2 }} />
-                       <div style={{ flex: 1, height: 4, background: step >= 3 ? '#3b82f6' : '#e2e8f0', borderRadius: 2 }} />
-                       <div style={{ flex: 1, height: 4, background: step >= 4 ? '#3b82f6' : '#e2e8f0', borderRadius: 2 }} />
+                       <div style={{ flex: 1, height: 4, background: step >= 1 ? '#3b82f6' : 'var(--editor-border)', borderRadius: 2 }} />
+                       <div style={{ flex: 1, height: 4, background: step >= 2 ? '#3b82f6' : 'var(--editor-border)', borderRadius: 2 }} />
+                       <div style={{ flex: 1, height: 4, background: step >= 3 ? '#3b82f6' : 'var(--editor-border)', borderRadius: 2 }} />
+                       <div style={{ flex: 1, height: 4, background: step >= 4 ? '#3b82f6' : 'var(--editor-border)', borderRadius: 2 }} />
                    </div>
 
                    {step === 1 && (
                       <div style={{ display: 'grid', gap: 15, maxWidth: 500 }}>
-                          <input type="text" placeholder="Host (ej: localhost)" value={dbConfig.host} onChange={e => setDbConfig({...dbConfig, host: e.target.value})} style={{ padding: 12, borderRadius: 8, border: '1px solid #e2e8f0' }} />
-                          <input type="text" placeholder="Usuario" value={dbConfig.user} onChange={e => setDbConfig({...dbConfig, user: e.target.value})} style={{ padding: 12, borderRadius: 8, border: '1px solid #e2e8f0' }} />
-                          <input type="password" placeholder="Contraseña" value={dbConfig.pass} onChange={e => setDbConfig({...dbConfig, pass: e.target.value})} style={{ padding: 12, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+                          <input type="text" placeholder="Host (ej: localhost)" value={dbConfig.host} onChange={e => setDbConfig({...dbConfig, host: e.target.value})} style={{ padding: 12, borderRadius: 8, border: '1px solid var(--editor-border)', background: 'var(--input-bg)', color: 'var(--input-text)' }} />
+                          <input type="text" placeholder="Usuario" value={dbConfig.user} onChange={e => setDbConfig({...dbConfig, user: e.target.value})} style={{ padding: 12, borderRadius: 8, border: '1px solid var(--editor-border)', background: 'var(--input-bg)', color: 'var(--input-text)' }} />
+                          <input type="password" placeholder="Contraseña" value={dbConfig.pass} onChange={e => setDbConfig({...dbConfig, pass: e.target.value})} style={{ padding: 12, borderRadius: 8, border: '1px solid var(--editor-border)', background: 'var(--input-bg)', color: 'var(--input-text)' }} />
                           <button onClick={handleConnect} disabled={isTesting} style={{ padding: 15, background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 800 }}>
                               {isTesting ? 'Conectando...' : 'Conectar'}
                           </button>
@@ -181,14 +181,14 @@ export default function DatabaseNodeEditor({ data = {}, onUpdate }) {
                        <div style={{ display: 'grid', gap: 10 }}>
                            <h3 style={{ fontSize: 16, fontWeight: 700 }}>Selecciona Tabla (en {selectedDb}):</h3>
                            {['clientes', 'facturas', 'usuarios'].map(t => (
-                               <button key={t} onClick={() => handleSelectTable(t)} style={{ padding: 15, textAlign: 'left', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }}>{t}</button>
+                               <button key={t} onClick={() => handleSelectTable(t)} style={{ padding: 15, textAlign: 'left', background: 'var(--input-bg)', color: 'var(--input-text)', border: '1px solid var(--editor-border)', borderRadius: 8, cursor: 'pointer' }}>{t}</button>
                            ))}
                        </div>
                    )}
 
                    {step === 4 && (
                        <div>
-                           <textarea value={dbConfig.query} onChange={e => setDbConfig({...dbConfig, query: e.target.value})} style={{ width: '100%', height: 120, padding: 15, border: '1px solid #e2e8f0', borderRadius: 8, fontFamily: 'monospace', marginBottom: 15 }} />
+                           <textarea value={dbConfig.query} onChange={e => setDbConfig({...dbConfig, query: e.target.value})} style={{ width: '100%', height: 120, padding: 15, border: '1px solid var(--editor-border)', background: 'var(--input-bg)', color: 'var(--input-text)', borderRadius: 8, fontFamily: 'monospace', marginBottom: 15 }} />
                            <button onClick={handleTestQuery} disabled={isTesting} style={{ width: '100%', padding: 15, background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 800 }}>
                                {isTesting ? 'Ejecutando...' : 'Obtener Datos'}
                            </button>

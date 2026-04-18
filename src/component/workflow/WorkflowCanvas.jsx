@@ -36,14 +36,20 @@ const GLOBAL_STYLE = `
     --node-desc: #71717a; --node-footer-bg: rgba(255, 255, 255, 0.02); 
     --canvas-bg: #030712; --header-bg: rgba(9, 9, 11, 0.85); --grid-color: #111827; 
     --box-shadow: 0 25px 60px rgba(0,0,0,0.6); --btn-bg: #18181b; --btn-border: #27272a; 
-    --btn-text: #a1a1aa; --surface-glass: rgba(9, 9, 11, 0.8); 
+    --btn-text: #a1a1aa; --surface-glass: rgba(15, 15, 20, 0.7); 
+    --editor-bg: #020617; --editor-header: #0f172a; --editor-border: #1e293b;
+    --editor-sidebar: #0f172a; --panel-bg: #0c0c0e; --panel-border: rgba(255,255,255,0.05);
+    --input-bg: #1e293b; --input-text: #f1f5f9;
   }
   .theme-light { 
     --node-bg: #ffffff; --node-border: #e4e4e7; --node-text: #09090b; 
     --node-desc: #71717a; --node-footer-bg: #fafafa; 
     --canvas-bg: #f8fafc; --header-bg: rgba(255, 255, 255, 0.9); --grid-color: #e2e8f0; 
     --box-shadow: 0 10px 40px rgba(0,0,0,0.06); --btn-bg: #ffffff; --btn-border: #e4e4e7; 
-    --btn-text: #3f3f46; --surface-glass: rgba(255, 255, 255, 0.8); 
+    --btn-text: #3f3f46; --surface-glass: rgba(255, 255, 255, 0.7); 
+    --editor-bg: #f1f5f9; --editor-header: #ffffff; --editor-border: #e2e8f0;
+    --editor-sidebar: #f8fafc; --panel-bg: #ffffff; --panel-border: #e2e8f0;
+    --input-bg: #ffffff; --input-text: #1e293b;
   }
 
   .premium-node { transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
@@ -157,15 +163,31 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
             const payload = JSON.stringify({ nodes, edges, invoiceData });
             localStorage.setItem('invoice_master_save', payload);
         } catch(e) {
-            if (e.name === 'QuotaExceededError') {
+            if (e.name === 'QuotaExceededError' || e.message?.includes('quota')) {
                 console.warn("Storage quota exceeded. Clearing non-essential data...");
-                // Strategy: if too big, try saving without the database records (the heaviest part)
+                // Aggressive cleaning strategy
                 try {
-                    const lightNodes = nodes.map(n => ({ ...n, data: { ...n.data, records: undefined } }));
-                    localStorage.setItem('invoice_master_save', JSON.stringify({ nodes: lightNodes, edges, invoiceData }));
-                    showToast("Espacio local lleno. Se guardó estructura sin datos pesados.", "warning");
+                    // 1. Remove heavy datasets from nodes
+                    const lightNodes = nodes.map(n => ({ 
+                        ...n, 
+                        data: { ...n.data, records: undefined, results: undefined } 
+                    }));
+                    
+                    // 2. Try saving this lighter version
+                    const lightPayload = JSON.stringify({ nodes: lightNodes, edges, invoiceData });
+                    if (lightPayload.length < 4000000) { // Keep under 4MB
+                         localStorage.setItem('invoice_master_save', lightPayload);
+                         // showToast("Espacio local lleno. Se guardó versión ligera.", "warning");
+                    } else {
+                         // 3. If still too big, it's likely the images in invoiceData. Clear images/elements if necessary or just save nodes.
+                         const ultraLightPayload = JSON.stringify({ nodes: lightNodes, edges });
+                         localStorage.setItem('invoice_master_save', ultraLightPayload);
+                         showToast("Aviso: Documento demasiado pesado. Solo se guardó la estructura del flujo.", "error");
+                    }
                 } catch(e2) {
-                    console.error("Critical storage failure", e2);
+                    // 4. Last resort: clear completely to avoid infinite UI blocking if it's a browser lock
+                    console.error("Critical storage failure - potentially corrupted localStorage", e2);
+                    // localStorage.removeItem('invoice_master_save');
                 }
             }
         }
@@ -184,15 +206,16 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
   if (editingDatabaseId) {
     const node = nodes.find(n => n.id === editingDatabaseId);
     return (
-        <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#020617' }}>
-            <div style={{ height: 64, background: '#0f172a', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', padding: '0 30px', gap: 20, zIndex: 100 }}>
+        <div className={theme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--editor-bg)' }}>
+            <style>{GLOBAL_STYLE}</style>
+            <div style={{ height: 64, background: 'var(--editor-header)', borderBottom: '1px solid var(--editor-border)', display: 'flex', alignItems: 'center', padding: '0 30px', gap: 20, zIndex: 100 }}>
                 <button onClick={() => setEditingDatabaseId(null)} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 13 }}><ArrowLeft size={18} /> Volver al Flujo</button>
-                <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>Configuración de Fuente de Datos</div>
+                <div style={{ color: 'var(--node-text)', fontWeight: 800, fontSize: 16 }}>Configuración de Fuente de Datos</div>
             </div>
             {node?.type === 'schedule' ? (
-                <SchedulerNodeEditor onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
+                <SchedulerNodeEditor theme={theme} onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
             ) : (
-                <DatabaseNodeEditor onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
+                <DatabaseNodeEditor theme={theme} onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
             )}
         </div>
     );
@@ -202,12 +225,13 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
     const dbNode = nodes.find(n => n.type === 'database');
     const dataset = dbNode?.data?.records || [];
     return (
-      <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#020617' }}>
-        <div style={{ height: 64, background: '#0f172a', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', padding: '0 30px', gap: 20, zIndex: 100 }}>
+      <div className={theme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--editor-bg)' }}>
+        <style>{GLOBAL_STYLE}</style>
+        <div style={{ height: 64, background: 'var(--editor-header)', borderBottom: '1px solid var(--editor-border)', display: 'flex', alignItems: 'center', padding: '0 30px', gap: 20, zIndex: 100 }}>
             <button onClick={() => setEditingInvoiceId(null)} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 13 }}><ArrowLeft size={18} /> Volver al Flujo</button>
-            <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>Estudio de Diseño de Documentos</div>
+            <div style={{ color: 'var(--node-text)', fontWeight: 800, fontSize: 16 }}>Estudio de Diseño de Documentos</div>
         </div>
-        <DocumentDesigner data={invoiceData} dataset={dataset} onUpdate={d => setInvoiceData(prev => ({ ...prev, ...d }))} />
+        <DocumentDesigner theme={theme} data={invoiceData} dataset={dataset} onUpdate={d => setInvoiceData(prev => ({ ...prev, ...d }))} />
       </div>
     );
   }
