@@ -6,7 +6,7 @@ import {
   Box, FileText, Smartphone, Table as TableIcon, Database, Check, History, 
   BarChart2, Plus, Smile, Sliders, Monitor, Crop, 
   MoreHorizontal, ChevronDown, AlignLeft, Info, Grid, List, Search, Play, Sun, Moon,
-  Zap, Save, FileJson, Clock
+  Zap, Save, FileJson, Clock, QrCode, GitBranch, GitFork, Repeat, LayoutTemplate, Hash
 } from "lucide-react";
 import PropertiesPanel from "../properties/PropertiesPanel";
 import ExportTool from "../export/ExportTool";
@@ -38,13 +38,29 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
   }), [data]);
 
   const [selectedElementId, setSelectedElementId] = useState(null);
+
+  useEffect(() => {
+    window.__EDITOR_DATASET__ = dataset;
+  }, [dataset]);
+
   const [selectedCells, setSelectedCells] = useState([]);
   const [selectionRange, setSelectionRange] = useState(null);
   const [zoom, setZoom] = useState(0.75);
   const [activeTab, setActiveTab] = useState("elements"); 
   const [activePageIdx, setActivePageIdx] = useState(0); 
+
+  // Logic Builder States
+  const [isLogicModalOpen, setIsLogicModalOpen] = useState(false);
+  const [editingLogicId, setEditingLogicId] = useState(null);
+  const [logicRules, setLogicRules] = useState([{ op1: '', rel: '===', op2: '', joiner: '&&' }]);
   const [recordIdx, setRecordIdx] = useState(0);
   const [toast, setToast] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [dataTabsOpen, setDataTabsOpen] = useState({ globals: true, collections: true });
+
+  const currentDatasetRecord = dataset[recordIdx] || dataset[0] || {};
+  const datasetGlobals = Object.entries(currentDatasetRecord).filter(([_, v]) => !Array.isArray(v));
+  const datasetCollections = Object.entries(currentDatasetRecord).filter(([_, v]) => Array.isArray(v));
 
   const [history, setHistory] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
@@ -98,6 +114,39 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
 
   const showToast = (message, type = "success") => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
 
+  const handleSearch = (fromStart = false) => {
+    if (!searchQuery.trim()) return;
+    const q = searchQuery.toLowerCase().trim();
+    
+    // Try to find from current position + 1
+    let foundIdx = -1;
+    const startIndex = fromStart ? 0 : recordIdx + 1;
+
+    for (let i = startIndex; i < dataset.length; i++) {
+        if (Object.values(dataset[i]).some(val => String(val).toLowerCase().includes(q))) {
+            foundIdx = i;
+            break;
+        }
+    }
+
+    // Wrap around to start if not found
+    if (foundIdx === -1 && startIndex > 0) {
+        for (let i = 0; i <= recordIdx; i++) {
+            if (Object.values(dataset[i]).some(val => String(val).toLowerCase().includes(q))) {
+                foundIdx = i;
+                break;
+            }
+        }
+    }
+
+    if (foundIdx !== -1) {
+        setRecordIdx(foundIdx);
+        showToast(`Registro ${foundIdx + 1} de ${dataset.length}`);
+    } else {
+        showToast("No se encontraron coincidencias", "error");
+    }
+  };
+
   const [versions, setVersions] = useState(() => {
     const saved = localStorage.getItem(`versions_${safeData.id}`);
     return saved ? JSON.parse(saved) : [];
@@ -121,6 +170,31 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
   useEffect(() => {
     centerView();
   }, []);
+  
+  // Sync selectedCells whenever selectionRange changes in a table
+  useEffect(() => {
+    if (!selectionRange) {
+        if (!selectedElementId?.includes(':cell:')) setSelectedCells([]);
+        return;
+    }
+    const targetId = selectionRange.tableId || (selectedElementId?.includes(':cell:') ? selectedElementId.split(':cell:')[0] : selectedElementId);
+    if (!targetId) return;
+    
+    const tableEl = safeData.elements.find(e => e.id === targetId);
+    if (!tableEl || tableEl.type !== 'table') return;
+    
+    const { start, end } = selectionRange;
+    const minR = Math.min(start.r, end.r), maxR = Math.max(start.r, end.r);
+    const minC = Math.min(start.c, end.c), maxC = Math.max(start.c, end.c);
+    
+    const cells = [];
+    for (let r = minR; r <= maxR; r++) {
+        for (let c = minC; c <= maxC; c++) {
+            cells.push({ id: `${targetId}:cell:${r}:${c}`, r, c });
+        }
+    }
+    setSelectedCells(cells);
+  }, [selectionRange, selectedElementId, safeData.elements]);
 
   useEffect(() => {
     if (!selectedElementId) return;
@@ -131,9 +205,9 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
     if (el?.pageId) { const pageIdx = safeData.pages.findIndex(p => p.id === el.pageId); if (pageIdx !== -1) setActivePageIdx(pageIdx); }
   }, [selectedElementId, safeData]);
 
-  const handleUpdateElement = (id, patch) => {
+  const handleUpdateElement = (id, patch, noSnapshot = false) => {
     if (!id) return;
-    snapshot();
+    if (!noSnapshot) snapshot();
     if (safeData.pages.some(p => p.id === id)) { 
         onUpdate({ pages: safeData.pages.map(p => p.id === id ? { ...p, ...patch, name: patch.name !== undefined ? patch.name : (patch.label !== undefined ? patch.label : p.name) } : p) }); 
         return; 
@@ -161,7 +235,25 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
       }) }); 
       return;
     }
-    onUpdate({ elements: safeData.elements.map((el) => el.id === id ? { ...el, ...patch, style: { ...(el.style || {}), ...(patch.style || {}) } } : el) });
+    onUpdate({ elements: safeData.elements.map((el) => {
+        if (el.id !== id) return el;
+        
+        const style = { ...(el.style || {}), ...(patch.style || {}) };
+        
+        // Deep merge for chart
+        let chart = el.chart ? JSON.parse(JSON.stringify(el.chart)) : {};
+        if (patch.chart) {
+            chart = { ...chart, ...patch.chart };
+        }
+
+        // Deep merge for table
+        let table = el.table ? JSON.parse(JSON.stringify(el.table)) : {};
+        if (patch.table) {
+            table = { ...table, ...patch.table };
+        }
+
+        return { ...el, ...patch, style, chart, table };
+    }) });
   };
 
   const handleMovePage = (from, to) => {
@@ -172,11 +264,63 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
       setActivePageIdx(to);
   };
 
-  const handleReorderElements = (dragId, dropId) => {
+  const openLogicBuilder = (id) => {
+    const el = safeData.elements.find(e => e.id === id);
+    if (!el || (!el.type.startsWith('logical-'))) return;
+    
+    setEditingLogicId(id);
+    const raw = el.logic?.condition || '';
+    
+    // For now, if it's already complex, we just set it as the first rule
+    // In a real multi-parse scenario, we'd regex this, but for the builder:
+    if (raw) {
+        setLogicRules([{ op1: raw, rel: 'CUSTOM', op2: '', joiner: '&&' }]);
+    } else {
+        setLogicRules([{ op1: '', rel: '===', op2: '', joiner: '&&' }]);
+    }
+    setIsLogicModalOpen(true);
+  };
+
+  const saveLogicCondition = () => {
+    let condition = "";
+    logicRules.forEach((r, i) => {
+        let part = "";
+        if (r.rel === 'CUSTOM') {
+            part = r.op1;
+        } else if (r.rel === '.includes') {
+            part = `${r.op1}.includes("${r.op2}")`;
+        } else {
+            part = `${r.op1} ${r.rel} ${r.op2}`;
+        }
+        
+        if (i === 0) {
+            condition = `(${part})`;
+        } else {
+            condition += ` ${logicRules[i-1].joiner} (${part})`;
+        }
+    });
+
+    handleUpdateElement(editingLogicId, { logic: { ...(safeData.elements.find(e => e.id === editingLogicId)?.logic || {}), condition: condition.trim() } });
+    setIsLogicModalOpen(false);
+  };
+
+  const handleReorderElements = (dragId, dropData) => {
       const nextElements = [...safeData.elements];
       const di = nextElements.findIndex(e => e.id === dragId);
-      const oi = nextElements.findIndex(e => e.id === dropId);
-      if (di > -1 && oi > -1) {
+      if (di === -1) return;
+
+      // Case 1: Drop into a hierarchy or change page
+      if (typeof dropData === 'object' && ('parentId' in dropData || 'pageId' in dropData)) {
+          if ('parentId' in dropData) nextElements[di].parentId = dropData.parentId;
+          if ('branch' in dropData) nextElements[di].branch = dropData.branch;
+          if ('pageId' in dropData) nextElements[di].pageId = dropData.pageId;
+          onUpdate({ elements: nextElements });
+          return;
+      }
+
+      // Case 2: Drop on another element (Z-order swap)
+      const oi = nextElements.findIndex(e => e.id === dropData);
+      if (oi > -1) {
           const tempZ = nextElements[di].z || 0;
           nextElements[di].z = nextElements[oi].z || 0;
           nextElements[oi].z = tempZ;
@@ -199,7 +343,7 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
           fontSize: 16, 
           borderWidth: (type === 'box' || type === 'table') ? "1px" : "0px", 
           borderStyle: "solid",
-          borderColor: "#cbd5e1",
+          borderColor: "#000000",
           color: "#0f172a", 
           background: (type === 'box' || type === 'table') ? "#ffffff" : "transparent", 
           borderRadius: 0, 
@@ -211,6 +355,47 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
     handleSelectId(id); 
     setSelectionRange(null); 
     showToast(`Añadido: ${type}`);
+  };
+
+  const evaluateLogic = (el, ds) => {
+    let condition = el.logic?.condition;
+    if (!condition || condition.trim() === "" || condition.trim() === "(VACIO)") return true;
+    
+    condition = condition.replace(/\{\{(.*?)\}\}/g, '$1');
+
+    try {
+        const currentDataArray = Array.isArray(ds) ? ds : (ds ? [ds] : [currentDatasetRecord]);
+        const record = currentDataArray[0] || {};
+        
+        const proxyData = new Proxy(record, {
+            get: (target, prop) => {
+                if (typeof prop !== 'string') return target[prop];
+                if (prop in target) return target[prop];
+                const keys = Object.keys(target);
+                const iKey = keys.find(k => k.toLowerCase() === prop.toLowerCase());
+                return iKey ? target[iKey] : undefined;
+            }
+        });
+
+        let fn;
+        try {
+            fn = new Function('DATA', `
+                try {
+                    with(DATA) {
+                        return (${condition});
+                    }
+                } catch(e) { 
+                    return false; 
+                }
+            `);
+        } catch (syntaxError) {
+            return false;
+        }
+        
+        return !!fn(proxyData);
+    } catch (e) {
+        return false;
+    }
   };
 
   const handleTableAction = (tableId, action, params = {}) => {
@@ -226,11 +411,11 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
         if (action === 'add-row') {
             const insertAt = targetR + 1;
             t.rows = rows + 1;
-            const newData = [], newStyles = {};
+            const newData = [], newStyles = {}, newMerges = [];
             for(let r=0; r<t.rows; r++){
-                if(r < insertAt) newData[r] = (t.data||[])[r] || [];
-                else if(r === insertAt) newData[r] = [];
-                else newData[r] = (t.data||[])[r-1] || [];
+                if(r < insertAt) newData[r] = [...((t.data||[])[r] || [" "])];
+                else if(r === insertAt) newData[r] = Array(t.cols || 1).fill(" "); // Match full grid columns
+                else newData[r] = [...((t.data||[])[r-1] || [" "])];
             }
             Object.entries(t.cellStyles || {}).forEach(([k,v]) => {
                 const [r,c] = k.split(':').map(Number);
@@ -242,14 +427,19 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                 nextHeights.splice(insertAt, 0, nextHeights[targetR] || 50);
                 t.rowHeights = nextHeights;
             }
-            t.data = newData; t.cellStyles = newStyles;
+            (t.merges || []).forEach(m => {
+                if (m.r >= insertAt) newMerges.push({ ...m, r: m.r + 1 });
+                else if (m.r + m.rs - 1 >= insertAt) newMerges.push({ ...m, rs: m.rs + 1 }); 
+                else newMerges.push(m);
+            });
+            t.data = newData; t.cellStyles = newStyles; t.merges = newMerges;
         } else if (action === 'del-row') {
             if (rows <= 1) return el;
             t.rows = rows - 1;
             const newData = [], newStyles = {}, newMerges = [];
             for(let r=0; r<t.rows; r++){
-                if(r < targetR) newData[r] = (t.data||[])[r] || [];
-                else newData[r] = (t.data||[])[r+1] || [];
+                if(r < targetR) newData[r] = [...((t.data||[])[r] || [" "])];
+                else newData[r] = [...((t.data||[])[r+1] || [" "])];
             }
             Object.entries(t.cellStyles || {}).forEach(([k,v]) => {
                 const [r,c] = k.split(':').map(Number);
@@ -270,41 +460,62 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
             }
             t.data = newData; t.cellStyles = newStyles; t.merges = newMerges.filter(m => m.rs > 0 && m.cs > 0);
         } else if (action === 'del-cell') {
-            const newData = [...(t.data || [])];
-            const rowData = [...(newData[targetR] || [])];
-            rowData.splice(targetC, 1);
-            newData[targetR] = rowData;
-            
-            // Desplazar estilos solo en esa fila
-            const newStyles = {};
-            Object.entries(t.cellStyles || {}).forEach(([k, v]) => {
-                const [r, c] = k.split(':').map(Number);
-                if (r !== targetR) { newStyles[k] = v; return; }
-                if (c === targetC) return;
-                if (c > targetC) newStyles[`${r}:${c-1}`] = v;
-                else newStyles[k] = v;
-            });
-            t.data = newData; t.cellStyles = newStyles;
-        } else if (action === 'add-cell') {
-            // Inserción LOCAL por fila
-            const newData = [...(t.data || [])];
-            const rowData = [...(newData[targetR] || [])];
-            const insertAt = targetC + 1;
-            rowData.splice(insertAt, 0, "");
-            newData[targetR] = rowData;
-            
-            // Si la fila ahora es la más ancha, actualizamos cols
-            t.cols = Math.max(t.cols, rowData.length);
+            const { row, col } = params;
+            const r = row !== undefined ? Number(row) : Number(targetR);
+            const c = col !== undefined ? Number(col) : Number(targetC);
 
-            // Desplazar estilos solo en esa fila
+            if (isNaN(r) || isNaN(c)) return el;
+
+            const newData = [...(t.data || [])];
+            const rowArr = [...(newData[r] || [])];
+            
+            // Just splice, don't prevent last cell deletion. 
+            // The rebalance engine will fill the gap with a merge.
+            rowArr.splice(c, 1);
+            newData[r] = rowArr;
+            t.data = newData;
+
+            // Shift styles
             const newStyles = {};
-            Object.entries(t.cellStyles || {}).forEach(([k, v]) => {
-                const [r, c] = k.split(':').map(Number);
-                if (r !== targetR) { newStyles[k] = v; return; }
-                if (c >= insertAt) newStyles[`${r}:${c+1}`] = v;
-                else newStyles[k] = v;
+            Object.entries(t.cellStyles || {}).forEach(([key, v]) => {
+                const [sr, sc] = key.split(':').map(Number);
+                if (sr !== r) { newStyles[key] = v; return; }
+                if (sc === c) return;
+                if (sc > c) newStyles[`${sr}:${sc-1}`] = v;
+                else newStyles[key] = v;
             });
-            t.data = newData; t.cellStyles = newStyles;
+            t.cellStyles = newStyles;
+
+            // Shift specific row merges
+            t.merges = (t.merges || []).filter(m => !(m.r === r && m.c === c)).map(m => {
+                if (m.r !== r) return m;
+                if (m.c > c) return { ...m, c: m.c - 1 };
+                if (m.c < c && m.c + m.cs > c) return { ...m, cs: m.cs - 1 };
+                return m;
+            });
+        } else if (action === 'add-cell') {
+            const { independent, row } = params;
+            const targetRow = row !== undefined ? row : targetR;
+            
+            // Local addition logic
+            const newData = [...(t.data || [])];
+            const rowArr = [...(newData[targetRow] || [])];
+            const insertAt = (independent || row !== undefined) ? rowArr.length : (targetC + 1);
+            rowArr.splice(insertAt, 0, " ");
+            newData[targetRow] = rowArr;
+            t.data = newData;
+
+            // Shift styles for that row if it was a mid-insert
+            if (!independent && row === undefined) {
+                const newStyles = {};
+                Object.entries(t.cellStyles || {}).forEach(([k, v]) => {
+                    const [sr, sc] = k.split(':').map(Number);
+                    if (sr !== targetRow) { newStyles[k] = v; return; }
+                    if (sc >= insertAt) newStyles[`${sr}:${sc+1}`] = v;
+                    else newStyles[k] = v;
+                });
+                t.cellStyles = newStyles;
+            }
         } else if (action === 'add-col') {
             const insertAt = targetC + 1;
             t.cols = cols + 1;
@@ -364,10 +575,30 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
         } else if (action === 'update-dims') {
             t.colWidths = params.colWidths || t.colWidths;
             t.rowHeights = params.rowHeights || t.rowHeights;
+        } else if (action === 'update-props') {
+            Object.assign(t, params);
         }
+
+        // --- REBALANCE TABLE INTEGRITY ---
+        // Ensure every row reaches the same total colspan (t.cols)
+        const rowData = t.data || [];
+        const maxRealCols = rowData.reduce((max, curr) => Math.max(max, (curr || []).length), 0);
+        
+        // Allow t.cols to shrink if we deleted the column that was making it wide
+        t.cols = maxRealCols || 1;
+        
+        // Clean up invalid merges
+        let merges = [...(t.merges || [])];
+        merges = merges.filter(m => m.r < t.rows && m.c < t.cols);
+        t.merges = merges.filter(m => m.rs > 0 && m.cs > 0);
+
         const updatedEl = { ...el, table: t };
         // Sync total width and height
-        if (t.colWidths) updatedEl.w = t.colWidths.reduce((a, b) => a + b, 0);
+        if (t.colWidths) {
+            while (t.colWidths.length < t.cols) t.colWidths.push(100);
+            if (t.colWidths.length > t.cols) t.colWidths = t.colWidths.slice(0, t.cols);
+            updatedEl.w = t.colWidths.reduce((a, b) => a + b, 0);
+        }
         if (t.rowHeights) updatedEl.h = t.rowHeights.reduce((a, b) => a + b, 0);
         return updatedEl;
       })
@@ -440,6 +671,7 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
     }
     showToast("Elemento eliminado");
   };
+
 
   const undoRef = useRef(undo);
   const redoRef = useRef(redo);
@@ -538,9 +770,33 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                         </div>
                         <div>
                             <div style={{ fontSize: 10, fontWeight: 900, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1 }}>Vista de Registros</div>
-                            <div style={{ fontSize: 14, fontWeight: 900, color: "#1e293b" }}>{dataset.length} Registros Cargados</div>
+                            <div style={{ fontSize: 14, fontWeight: 900, color: "var(--node-text)" }}>{dataset.length.toLocaleString()} Cargados</div>
                         </div>
                     </div>
+                </div>
+
+                <div style={{ flex: 1, maxWidth: 400, margin: "0 40px", position: "relative" }}>
+                    <Search size={16} style={{ position: "absolute", left: 15, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }} />
+                    <input 
+                        type="text" 
+                        placeholder="Buscar por nombre, ID, etc..." 
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                        style={{ 
+                            width: "100%", padding: "12px 15px 12px 45px", borderRadius: 15, border: "1px solid var(--panel-border)", 
+                            background: "var(--input-bg)", color: "var(--node-text)", fontSize: 13, fontWeight: 600, outline: "none",
+                            transition: "all 0.3s"
+                        }}
+                    />
+                    {searchQuery && (
+                        <button 
+                            onClick={handleSearch}
+                            style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "#3b82f6", color: "#white", border: "none", borderRadius: 8, padding: "5px 15px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}
+                        >
+                            SALTAR
+                        </button>
+                    )}
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -616,21 +872,27 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
             {/* FLOATING LEFT TOOLBAR */}
             <div className="glass" style={{ width: 90, margin: "0 0 20px 20px", borderRadius: 30, display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0", gap: 32 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
                     <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "center" }}>BASIC</div>
                     <button onClick={() => addElement('text')} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Texto"><Type size={22}/></button>
                     <button onClick={() => addElement('box')} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Contenedor"><Square size={22}/></button>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
                     <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "center" }}>DATA</div>
                     <button onClick={() => addElement('table', { table: { rows: 3, cols: 3, data: [["","",""],["","",""],["","",""]] } })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Tabla"><TableIcon size={22}/></button>
+                    <button onClick={() => addElement('barcode', { barcode: { type: 'qrcode', includeText: false }, text: 'https://negocioenmarcha.com', w: 100, h: 100 })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="QR / Barcode"><QrCode size={22}/></button>
                     <button onClick={() => addElement('chart', { chart: { type: 'bar', labels: ["I","II","III"], datasets: [{ label: "Data", data: [100, 150, 120], color: "#3b82f6" }] } })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Estadística"><BarChart2 size={22}/></button>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
                     <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "center" }}>VISTA</div>
                     <button onClick={centerView} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Centrar Vista"><Monitor size={22}/></button>
-                    <button onClick={() => setZoom(prev => Math.min(2, prev + 0.1))} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Zoom In"><ZoomIn size={22}/></button>
-                    <button onClick={() => setZoom(prev => Math.max(0.1, prev - 0.1))} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Zoom Out"><ZoomOut size={22}/></button>
+                    <button onClick={() => setZoom(prev => Math.min(2, prev + 0.1))} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Zoom In"><ZoomIn size={16}/></button>
+                    <button onClick={() => setZoom(prev => Math.max(0.1, prev - 0.1))} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Zoom Out"><ZoomOut size={16}/></button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
+                    <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "center" }}>LÓGICA ESTRUCTURAL</div>
+                    <button onClick={() => addElement('logical-if', { logic: { condition: "" }, label: "BLOQUE IF", w: 50, h: 50 })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Contenedor Condicional (IF)"><GitBranch size={22}/></button>
+                    <button onClick={() => addElement('logical-loop', { logic: { loop: { type: "collection", source: "", count: 1, spacing: 20 } }, label: "BLOQUE BUCLE", w: 50, h: 50 })} className="premium-btn" style={{ width: 54, height: 54, borderRadius: 18, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e293b", boxShadow: "0 5px 15px rgba(0,0,0,0.05)" }} title="Contenedor Repetitivo (LOOP)"><Repeat size={22}/></button>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: "auto" }}>
                     <StickerTool onAdd={st => addElement('image', { text: `<img src="${st}" style="width:100%;height:100%;display:block;"/>` })} />
@@ -709,13 +971,17 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                         <div style={{ transform: `scale(${zoom})`, transformOrigin: "top center", transition: isPanning ? "none" : "transform 0.15s ease-out" }}>
                             <PaperCanvas size={safeData.size} orientation={safeData.orientation} background={safeData.pages[activePageIdx]?.bgUrl} onMouseDown={(e) => { if (e.target === e.currentTarget) { handleSelectId(safeData.pages[activePageIdx].id); setSelectionRange(null); } }}>
                                 <WorkLayer 
-                                    elements={safeData.elements.filter(el => el.pageId === safeData.pages[activePageIdx].id)} 
+                                    elements={safeData.elements} 
+                                    pages={safeData.pages}
+                                    activePageIdx={activePageIdx}
                                     dataset={dataset && dataset.length > 0 ? [dataset[recordIdx]] : []}
                                     selectedId={selectedElementId} 
                                     selectedCells={selectedCells}
                                     onSelect={handleSelectId} 
                                     onSelectCells={setSelectedCells}
                                     onChange={handleUpdateElement} 
+                                    onAddElement={addElement}
+                                    onDoubleClick={openLogicBuilder}
                                     zoom={zoom}
                                     selectionRange={selectionRange}
                                     onRangeSelect={setSelectionRange}
@@ -748,15 +1014,107 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                     {activeTab === "elements" && (
                         <div style={{ animation: "scaleIn 0.3s" }} onMouseDown={e => e.stopPropagation()}>
                             <PropertiesPanel
-                                el={selectedElementId ? (safeData.elements.find(e => e.id === selectedElementId) || { id: selectedElementId, _isCell: selectedElementId?.includes(':cell:'), table: safeData.elements.find(t => selectedElementId?.startsWith(t.id))?.table }) : undefined}
+                                key={selectedElementId || 'none'}
+                                el={(() => {
+                                    if (!selectedElementId) return undefined;
+                                    const found = safeData.elements.find(e => e.id === selectedElementId);
+                                    if (found) return found;
+                                    if (selectedElementId.includes(':cell:')) {
+                                        const parts = selectedElementId.split(':');
+                                        const tableId = parts[0];
+                                        const r = parts[2];
+                                        const c = parts[3];
+                                        const tableEl = safeData.elements.find(e => e.id === tableId);
+                                        if (tableEl) {
+                                            return {
+                                                id: selectedElementId,
+                                                type: 'cell',
+                                                _isCell: true,
+                                                style: (tableEl.table?.cellStyles || {})[`${r}:${c}`] || {},
+                                                table: tableEl.table
+                                            };
+                                        }
+                                    }
+                                    return undefined;
+                                })()}
+                                elements={safeData.elements}
+                                dataset={dataset}
                                 selectedCells={selectedCells}
-                                onStyle={(s) => {
-                                    const targetId = selectedElementId?.includes(':cell:') ? selectedElementId.split(':cell:')[0] : selectedElementId;
-                                    handleUpdateElement(targetId, { style: { ...(safeData.elements.find(e => e.id === targetId)?.style || {}), ...s } });
+                                onJoinCells={() => {
+                                    const targetId = (selectedCells[0]?.id || selectedElementId)?.split(':cell:')[0];
+                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                    if (!tableEl || selectedCells.length < 2) return;
+                                    const rows = selectedCells.map(c => c.r), cols = selectedCells.map(c => c.c);
+                                    const minR = Math.min(...rows), maxR = Math.max(...rows), minC = Math.min(...cols), maxC = Math.max(...cols);
+                                    const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
+                                    const table = tableEl.table || {};
+                                    const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
+                                    handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
+                                    setSelectedCells([]);
+                                    setSelectionRange(null);
                                 }}
-                                onChange={(p) => {
-                                    const targetId = selectedElementId?.includes(':cell:') ? selectedElementId.split(':cell:')[0] : selectedElementId;
-                                    handleUpdateElement(targetId, p);
+                                onSplitCells={() => {
+                                    const targetId = (selectedCells[0]?.id || selectedElementId)?.split(':cell:')[0];
+                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                    if (!tableEl) return;
+                                    const table = tableEl.table || {};
+                                    
+                                    const targets = selectedCells.length > 0 ? selectedCells : [(() => {
+                                        const p = selectedElementId.split(':');
+                                        return { r: parseInt(p[2]), c: parseInt(p[3]) };
+                                    })()];
+
+                                    const newMerges = (table.merges || []).filter(m => {
+                                        const startsMatch = targets.some(sc => 
+                                            sc.r >= m.r && sc.r < m.r + m.rs &&
+                                            sc.c >= m.c && sc.c < m.c + m.cs
+                                        );
+                                        return !startsMatch;
+                                    });
+                                    
+                                    handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
+                                    setSelectedCells([]);
+                                    setSelectionRange(null);
+                                }}
+                                onStyle={(s, noSnap = false) => {
+                                    if (selectedCells && selectedCells.length > 0) {
+                                        // Update multiple cells at once
+                                        const tableId = selectedCells[0].id.split(':cell:')[0];
+                                        const tableEl = safeData.elements.find(e => e.id === tableId);
+                                        if (tableEl) {
+                                            const t = tableEl.table || {};
+                                            const cellStyles = { ...(t.cellStyles || {}) };
+                                            selectedCells.forEach(cell => {
+                                                const parts = cell.id.split(':');
+                                                const r = parts[2];
+                                                const c = parts[3];
+                                                cellStyles[`${r}:${c}`] = { ...(cellStyles[`${r}:${c}`] || {}), ...s };
+                                            });
+                                            handleUpdateElement(tableId, { table: { ...t, cellStyles } }, noSnap);
+                                        }
+                                    } else if (selectedElementId?.includes(':cell:')) {
+                                        const parts = selectedElementId.split(':');
+                                        const tableId = parts[0];
+                                        const r = parts[2];
+                                        const c = parts[3];
+                                        const tableEl = safeData.elements.find(e => e.id === tableId);
+                                        if (tableEl) {
+                                            const t = tableEl.table || {};
+                                            const cellStyles = { ...(t.cellStyles || {}) };
+                                            cellStyles[`${r}:${c}`] = { ...(cellStyles[`${r}:${c}`] || {}), ...s };
+                                            handleUpdateElement(tableId, { table: { ...t, cellStyles } }, noSnap);
+                                        }
+                                    } else {
+                                        handleUpdateElement(selectedElementId, { style: { ...(safeData.elements.find(e => e.id === selectedElementId)?.style || {}), ...s } }, noSnap);
+                                    }
+                                }}
+                                onChange={(p, noSnap = false) => {
+                                    if (selectedElementId?.includes(':cell:')) {
+                                        const [tableId] = selectedElementId.split(':');
+                                        handleUpdateElement(tableId, p, noSnap);
+                                    } else {
+                                        handleUpdateElement(selectedElementId, p, noSnap);
+                                    }
                                 }}
                                 onDelete={handleDelete}
                             />
@@ -772,16 +1130,17 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                         <button 
                                             onClick={() => {
-                                                const rows = selectedCells.map(c => c.r);
-                                                const cols = selectedCells.map(c => c.c);
-                                                const minR = Math.min(...rows), maxR = Math.max(...rows);
-                                                const minC = Math.min(...cols), maxC = Math.max(...cols);
                                                 const targetId = selectedCells[0].id.split(':cell:')[0];
                                                 const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                const table = tableEl?.table || {};
+                                                if (!tableEl) return;
+                                                const table = tableEl.table || {};
+                                                const rows = selectedCells.map(c => c.r), cols = selectedCells.map(c => c.c);
+                                                const minR = Math.min(...rows), maxR = Math.max(...rows), minC = Math.min(...cols), maxC = Math.max(...cols);
                                                 const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
                                                 const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
                                                 handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
+                                                setSelectedCells([]);
+                                                setSelectionRange(null);
                                             }}
                                             disabled={selectedCells.length < 2}
                                             style={{
@@ -791,20 +1150,25 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                                 fontSize: "10px", fontWeight: "900", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5
                                             }}
                                         >
-                                            <Zap size={14} /> UNIR
+                                            <LayoutTemplate size={14} /> UNIR
                                         </button>
 
                                         <button 
                                             onClick={() => {
                                                 const targetId = selectedCells[0].id.split(':cell:')[0];
                                                 const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                const table = tableEl?.table || {};
-                                                const rows = selectedCells.map(c => c.r);
-                                                const cols = selectedCells.map(c => c.c);
-                                                const newMerges = (table.merges || []).filter(m => 
-                                                    !selectedCells.some(sc => sc.r === m.r && sc.c === m.c)
-                                                );
+                                                if (!tableEl) return;
+                                                const table = tableEl.table || {};
+                                                const newMerges = (table.merges || []).filter(m => {
+                                                    const intersect = selectedCells.some(sc => 
+                                                        sc.r >= m.r && sc.r < m.r + m.rs &&
+                                                        sc.c >= m.c && sc.c < m.c + m.cs
+                                                    );
+                                                    return !intersect;
+                                                });
                                                 handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
+                                                setSelectedCells([]);
+                                                setSelectionRange(null);
                                             }}
                                             style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f1f5f9", border: "none", fontSize: "10px", fontWeight: "900", color: "#1e293b", cursor: "pointer" }}
                                         >SEPARAR</button>
@@ -941,28 +1305,140 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                 <h3 style={{ fontSize: 13, fontWeight: 900, color: "#1e293b", marginBottom: 4 }}>FUENTES DE DATOS</h3>
                                 <p style={{ fontSize: 11, color: "#64748b" }}>Usa estas variables en tus textos con doble llave: <b>{`{{variable}}`}</b></p>
                             </div>
-                            
-                            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                                {dataset.length > 0 ? (
-                                    Object.entries(dataset[recordIdx] || dataset[0]).map(([key, val]) => (
-                                        <div key={key} style={{ padding: "16px", borderRadius: "12px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                                                <code style={{ fontSize: 11, fontWeight: 900, color: "#3b82f6", background: "#eff6ff", padding: "4px 8px", borderRadius: 6 }}>{`{{${key}}}`}</code>
-                                                <button 
+                            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                                {dataset.length > 0 ? (() => {
+                                    const renderFieldCloud = (fields, colorBase) => (
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                                            {fields.map(([k, v]) => (
+                                                <div 
+                                                    key={k} 
                                                     onClick={() => {
-                                                        navigator.clipboard.writeText(`{{${key}}}`);
-                                                        showToast("¡Copiado al portapapeles!");
+                                                        const el = safeData.elements.find(e => e.id === selectedElementId);
+                                                        if (el && (el.type === 'logical-if' || el.type === 'logical-else-if')) {
+                                                            const current = el.logic?.condition || "";
+                                                            // Insert raw variable name for JS comparison
+                                                            handleUpdateElement(el.id, { logic: { ...el.logic, condition: current + (current ? " " : "") + k + " === " } });
+                                                            showToast(`Añadiendo ${k} a la expresión`);
+                                                        } else {
+                                                            navigator.clipboard.writeText(`{{${k}}}`);
+                                                            showToast("¡Copiado!");
+                                                        }
                                                     }}
-                                                    style={{ border: "none", background: "none", cursor: "pointer", color: "#94a3b8" }}
-                                                ><Copy size={14}/></button>
-                                            </div>
-                                            <div style={{ fontSize: 12, color: "#1e293b" }}>
-                                                <span style={{ color: "#94a3b8", fontSize: "10px", display: "block", marginBottom: 2 }}>VALOR DE MUESTRA:</span>
-                                                {String(val)}
-                                            </div>
+                                                    style={{ 
+                                                        flex: "1 1 calc(50% - 10px)", minWidth: 140, padding: "12px", borderRadius: "12px", 
+                                                        background: "white", border: "1px solid #e2e8f0", 
+                                                        boxShadow: "0 2px 4px rgba(0,0,0,0.02)", transition: "all 0.2s",
+                                                        cursor: "pointer"
+                                                    }}
+                                                    className="data-card"
+                                                >
+                                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                                        <code style={{ fontSize: 10, fontWeight: 900, color: colorBase, background: `${colorBase}10`, padding: "4px 8px", borderRadius: 6 }}>{k}</code>
+                                                    </div>
+                                                    {!Array.isArray(v) && (
+                                                        <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                                            {String(v)}
+                                                        </div>
+                                                    )}
+                                                    {Array.isArray(v) && (
+                                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                                                            <div style={{ padding: "4px 8px", borderRadius: 6, background: colorBase, color: "white", fontSize: 9, fontWeight: 900, display: "inline-block" }}>
+                                                                {v.length} LÍNEAS DETECTADAS
+                                                            </div>
+                                                            <div style={{ padding: 8, background: "#f8fafc", borderRadius: 8, border: "1px dashed #e2e8f0" }}>
+                                                                <p style={{ fontSize: 8, fontWeight: 800, color: colorBase, marginBottom: 6, textTransform: "uppercase" }}>SUB-CAMPOS (Repetitivos):</p>
+                                                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                                                                    {Object.keys(v[0] || {}).map(subKey => (
+                                                                        <div 
+                                                                            key={subKey} 
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                const el = safeData.elements.find(e => e.id === selectedElementId);
+                                                                                if (el && el.type === 'logical-loop') {
+                                                                                    handleUpdateElement(el.id, { logic: { ...el.logic, loop: { ...el.logic.loop, source: k } } });
+                                                                                    showToast(`Bucle asignado a: ${k}`);
+                                                                                } else if (el && (el.type === 'logical-if' || el.type === 'logical-else-if')) {
+                                                                                    const current = el.logic?.condition || "";
+                                                                                    handleUpdateElement(el.id, { logic: { ...el.logic, condition: current + (current ? " " : "") + subKey + " " } });
+                                                                                    showToast(`Añadiendo ${subKey}`);
+                                                                                } else {
+                                                                                    navigator.clipboard.writeText(`{{${subKey}}}`);
+                                                                                    showToast("Tag copiado");
+                                                                                }
+                                                                            }}
+                                                                            style={{ display: "flex", alignItems: "center", gap: 2, background: "white", padding: "1px 4px", borderRadius: 3, border: "1px solid #e2e8f0", cursor: "pointer" }}
+                                                                        >
+                                                                            <code style={{ fontSize: 8, fontWeight: 700, color: "#64748b" }}>{`{{${subKey}}}`}</code>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+
+                                                                <div style={{ height: '1px', background: '#e2e8f0', margin: '8px 0' }} />
+                                                                <p style={{ fontSize: 8, fontWeight: 800, color: "#64748b", marginBottom: 6, textTransform: "uppercase" }}>VISTA PREVIA (VALORES):</p>
+                                                                <div style={{ overflowX: 'auto', background: 'white', borderRadius: 4, padding: 4 }}>
+                                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8px' }}>
+                                                                        <thead>
+                                                                            <tr>
+                                                                                {Object.keys(v[0] || {}).slice(0, 3).map(sk => <th key={sk} style={{ textAlign: 'left', color: '#94a3b8', borderBottom: '1px solid #f1f5f9' }}>{sk}</th>)}
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody>
+                                                                            {v.slice(0, 2).map((row, ri) => (
+                                                                                <tr key={ri}>
+                                                                                    {Object.values(row).slice(0, 3).map((val, vi) => <td key={vi} style={{ color: '#475569' }}>{String(val)}</td>)}
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
                                         </div>
-                                    ))
-                                ) : (
+                                    );
+
+                                    return (
+                                        <>
+                                            {datasetGlobals.length > 0 && (
+                                                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                                    <button 
+                                                        onClick={() => setDataTabsOpen(prev => ({ ...prev, globals: !prev.globals }))}
+                                                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: "left" }}
+                                                    >
+                                                        <div style={{ fontSize: 11, fontWeight: 900, color: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                                                <div style={{ width: 4, height: 12, background: "#3b82f6", borderRadius: 4 }} /> 
+                                                                DATOS GLOBALES (BIBLIOTECA)
+                                                            </div>
+                                                            {dataTabsOpen.globals ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                        </div>
+                                                    </button>
+                                                    {dataTabsOpen.globals && renderFieldCloud(datasetGlobals, "#3b82f6")}
+                                                </div>
+                                            )}
+                                            
+                                            {datasetCollections.length > 0 && (
+                                                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 10 }}>
+                                                    <button 
+                                                        onClick={() => setDataTabsOpen(prev => ({ ...prev, collections: !prev.collections }))}
+                                                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: "left" }}
+                                                    >
+                                                        <div style={{ fontSize: 11, fontWeight: 900, color: "#8b5cf6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                                                <div style={{ width: 4, height: 12, background: "#8b5cf6", borderRadius: 4 }} /> 
+                                                                DATOS REPETITIVOS (TABLAS)
+                                                            </div>
+                                                            {dataTabsOpen.collections ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                        </div>
+                                                    </button>
+                                                    {dataTabsOpen.collections && renderFieldCloud(datasetCollections, "#8b5cf6")}
+                                                </div>
+                                            )}
+                                        </>
+                                    );
+                                })() : (
                                     <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
                                         No hay datos de muestra cargados.
                                     </div>
@@ -977,6 +1453,9 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                 pages={safeData.pages} 
                                 selectedId={selectedElementId} 
                                 onSelect={setSelectedElementId} 
+                                onTableAction={handleTableAction}
+                                currentRecord={currentDatasetRecord}
+                                evaluateLogic={evaluateLogic}
                                 onRename={(id, val) => {
                                     if (typeof val === 'object' && val._tableAction) {
                                         handleTableAction(id, val._tableAction, val.params || {});
@@ -990,6 +1469,7 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                 onRenamePage={(id, name) => handleUpdateElement(id, { name })}
                                 onMovePage={handleMovePage}
                                 onReorder={handleReorderElements}
+                                onDoubleClick={openLogicBuilder}
                             />
                         </div>
                     )}
@@ -1019,6 +1499,345 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                {toast.message.toUpperCase()}
             </div>
         )}
+
+        {/* --- LOGIC BUILDER MODAL --- */}
+        {isLogicModalOpen && (() => {
+            const editingEl = safeData.elements.find(e => e.id === editingLogicId);
+            const isLoop = editingEl?.type === 'logical-loop';
+            
+            return (
+            <div style={{ 
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', 
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999,
+                backdropFilter: 'blur(10px)'
+            }}>
+                <div style={{ 
+                    ...GLASS_STYLE, width: 600, maxHeight: '85vh', padding: 30, borderRadius: 32, 
+                    display: 'flex', flexDirection: 'column', gap: 20, border: '1px solid rgba(255,255,255,0.4)',
+                    boxShadow: '0 30px 100px rgba(0,0,0,0.5)', overflow: 'hidden'
+                }}>
+                    {/* Header */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                            <div style={{ background: isLoop ? 'linear-gradient(135deg, #7c3aed, #8b5cf6)' : 'linear-gradient(135deg, #3b82f6, #8b5cf6)', padding: 10, borderRadius: 14, color: 'white' }}>
+                                {isLoop ? <Repeat size={22} /> : <GitBranch size={22} />}
+                            </div>
+                            <div>
+                                <div style={{ fontSize: 18, fontWeight: 900, color: '#1e293b' }}>{isLoop ? 'Configurar Repetición (Bucle)' : 'Constructor Lógico Avanzado'}</div>
+                                <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>{isLoop ? 'Controla cuántas veces se duplica este bloque' : 'Define múltiples reglas para este objeto'}</div>
+                            </div>
+                        </div>
+                        <button onClick={() => setIsLogicModalOpen(false)} style={{ background: '#f1f5f9', border: 'none', padding: 8, borderRadius: 10, cursor: 'pointer', color: '#64748b' }}><Plus size={20} style={{ transform: 'rotate(45deg)' }} /></button>
+                    </div>
+
+                    {isLoop ? (
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 24, padding: '10px 0' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                <label style={{ fontSize: 12, fontWeight: 900, color: '#1e293b' }}>MODO DE FUNCIONAMIENTO</label>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                                    {[
+                                        { id: 'collection', label: 'Dinámico (Lista)', desc: 'Usa una lista de datos real', icon: Database },
+                                        { id: 'count', label: 'Estático (Cantidad)', desc: 'Define un número fijo', icon: Hash }
+                                    ].map(mode => (
+                                        <div 
+                                            key={mode.id}
+                                            onClick={() => handleUpdateElement(editingLogicId, { logic: { ...editingEl.logic, loop: { ...editingEl.logic?.loop, type: mode.id } } })}
+                                            style={{ 
+                                                padding: '20px', borderRadius: 20, border: '2px solid',
+                                                borderColor: (editingEl.logic?.loop?.type || 'collection') === mode.id ? '#7c3aed' : 'rgba(0,0,0,0.05)',
+                                                background: (editingEl.logic?.loop?.type || 'collection') === mode.id ? '#7c3aed08' : 'white',
+                                                cursor: 'pointer', transition: 'all 0.2s', display: 'flex', flexDirection: 'column', gap: 8
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                                <mode.icon size={18} color={(editingEl.logic?.loop?.type || 'collection') === mode.id ? '#7c3aed' : '#64748b'} />
+                                                <span style={{ fontWeight: 900, fontSize: 14, color: (editingEl.logic?.loop?.type || 'collection') === mode.id ? '#7c3aed' : '#1e293b' }}>{mode.label}</span>
+                                            </div>
+                                            <span style={{ fontSize: 10, color: '#64748b' }}>{mode.desc}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {(editingEl.logic?.loop?.type || 'collection') === 'count' ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    <label style={{ fontSize: 12, fontWeight: 900, color: '#1e293b' }}>CANTIDAD DE REPETICIONES</label>
+                                    <div style={{ display: 'flex', gap: 10 }}>
+                                        <input 
+                                            type="range" min="1" max="50" step="1"
+                                            value={editingEl.logic?.loop?.count || 1}
+                                            onChange={(e) => handleUpdateElement(editingLogicId, { logic: { ...editingEl.logic, loop: { ...editingEl.logic?.loop, count: parseInt(e.target.value) } } })}
+                                            style={{ flex: 1, accentColor: '#7c3aed' }}
+                                        />
+                                        <input 
+                                            type="number" min="1"
+                                            value={editingEl.logic?.loop?.count || 1}
+                                            onChange={(e) => handleUpdateElement(editingLogicId, { logic: { ...editingEl.logic, loop: { ...editingEl.logic?.loop, count: Math.max(1, parseInt(e.target.value) || 1) } } })}
+                                            style={{ width: 80, padding: '12px', borderRadius: 12, border: '1px solid #e2e8f0', textAlign: 'center', fontWeight: 900, fontSize: 16 }}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    <label style={{ fontSize: 12, fontWeight: 900, color: '#1e293b' }}>SELECCIONAR ORIGEN DE DATOS</label>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, maxHeight: 200, overflowY: 'auto', padding: 4 }}>
+                                        {dataset?.[0] && Object.keys(dataset[0]).filter(k => Array.isArray(dataset[0][k])).map(key => (
+                                            <button 
+                                                key={key}
+                                                onClick={() => handleUpdateElement(editingLogicId, { logic: { ...editingEl.logic, loop: { ...editingEl.logic?.loop, source: key } } })}
+                                                style={{ 
+                                                    padding: '14px', borderRadius: 15, border: '1px solid',
+                                                    borderColor: editingEl.logic?.loop?.source === key ? '#7c3aed' : '#e2e8f0',
+                                                    background: editingEl.logic?.loop?.source === key ? '#7c3aed10' : 'white',
+                                                    cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8
+                                                }}
+                                            >
+                                                <div style={{ width: 6, height: 6, borderRadius: '50%', background: editingEl.logic?.loop?.source === key ? '#7c3aed' : '#cbd5e1' }} />
+                                                <span style={{ fontSize: 13, fontWeight: 700, color: editingEl.logic?.loop?.source === key ? '#7c3aed' : '#1e293b' }}>{key}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                <label style={{ fontSize: 12, fontWeight: 900, color: '#1e293b' }}>ESPACIADO ENTRE ELEMENTOS (PX)</label>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+                                    <input 
+                                        type="number"
+                                        value={editingEl.logic?.loop?.spacing || 20}
+                                        onChange={(e) => handleUpdateElement(editingLogicId, { logic: { ...editingEl.logic, loop: { ...editingEl.logic?.loop, spacing: parseInt(e.target.value) || 0 } } })}
+                                        style={{ width: 100, padding: '12px', borderRadius: 12, border: '1px solid #e2e8f0', fontWeight: 900 }}
+                                    />
+                                    <span style={{ fontSize: 11, color: '#64748b' }}>Espacio vertical que se añade tras cada repetición.</span>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                <label style={{ fontSize: 12, fontWeight: 900, color: '#1e293b' }}>OBJETOS DENTRO DE ESTE BUCLE</label>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 120, overflowY: 'auto', paddingRight: 6 }}>
+                                    {safeData.elements.filter(it => it.parentId === editingLogicId).map(child => (
+                                        <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#7c3aed' }} />
+                                                <span style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>{child.label || child.type.toUpperCase()}</span>
+                                            </div>
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); handleUpdateElement(child.id, { parentId: null }); }}
+                                                style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 900, fontSize: 13 }}
+                                            >✕</button>
+                                        </div>
+                                    ))}
+                                    {safeData.elements.filter(it => it.parentId === editingLogicId).length === 0 && (
+                                        <div style={{ padding: 20, border: '2px dashed #e2e8f0', borderRadius: 15, textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
+                                            Este bucle está vacío. Arrastra objetos aquí en la pestaña "ORDEN".
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => setIsLogicModalOpen(false)}
+                                style={{ marginTop: 'auto', width: '100%', padding: '18px', borderRadius: 20, background: '#7c3aed', color: 'white', border: 'none', fontWeight: 900, fontSize: 14, cursor: 'pointer', boxShadow: '0 10px 30px rgba(124, 58, 237, 0.3)' }}
+                            >APLICAR Y CERRAR</button>
+                        </div>
+                    ) : (
+                        <>
+
+                    {/* Rules List */}
+                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 15, paddingRight: 8 }}>
+                        {logicRules.map((rule, idx) => (
+                            <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {idx > 0 && (
+                                    <div style={{ display: 'flex', justifyContent: 'center' }}>
+                                        <div style={{ display: 'flex', background: '#f1f5f9', padding: 4, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                                            <button 
+                                                onClick={() => setLogicRules(prev => prev.map((r, i) => i === idx-1 ? { ...r, joiner: '&&' } : r))}
+                                                style={{ padding: '6px 12px', border: 'none', borderRadius: 7, fontSize: 10, fontWeight: 900, cursor: 'pointer', background: logicRules[idx-1].joiner === '&&' ? '#1e293b' : 'transparent', color: logicRules[idx-1].joiner === '&&' ? 'white' : '#64748b' }}
+                                            >Y (AND)</button>
+                                            <button 
+                                                onClick={() => setLogicRules(prev => prev.map((r, i) => i === idx-1 ? { ...r, joiner: '||' } : r))}
+                                                style={{ padding: '6px 12px', border: 'none', borderRadius: 7, fontSize: 10, fontWeight: 900, cursor: 'pointer', background: logicRules[idx-1].joiner === '||' ? '#1e293b' : 'transparent', color: logicRules[idx-1].joiner === '||' ? 'white' : '#64748b' }}
+                                            >Ó (OR)</button>
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f8fafc', padding: 12, borderRadius: 20, border: '1px solid #e2e8f0' }}>
+                                    <input 
+                                        placeholder="Variable"
+                                        value={rule.op1}
+                                        onChange={(e) => setLogicRules(prev => prev.map((r, i) => i === idx ? { ...r, op1: e.target.value } : r))}
+                                        style={{ flex: 1.5, border: '1px solid #e2e8f0', background: 'white', padding: '10px 14px', borderRadius: 12, fontSize: 12, fontWeight: 700 }}
+                                    />
+                                    
+                                    <select 
+                                        value={rule.rel}
+                                        onChange={(e) => setLogicRules(prev => prev.map((r, i) => i === idx ? { ...r, rel: e.target.value } : r))}
+                                        style={{ flex: 1, background: '#1e293b', color: 'white', border: 'none', padding: '10px', borderRadius: 12, fontSize: 11, fontWeight: 900, height: 40 }}
+                                    >
+                                        <option value="===">IGUAL A</option>
+                                        <option value="!==">DIFERENTE DE</option>
+                                        <option value=">">MAYOR QUE</option>
+                                        <option value="<">MENOR QUE</option>
+                                        <option value=">=">MAYOR O IGUAL</option>
+                                        <option value="<=">MENOR O IGUAL</option>
+                                        <option value=".includes">CONTIENE</option>
+                                        <option value="CUSTOM">JS PERSONALIZADO</option>
+                                    </select>
+
+                                    {rule.rel !== 'CUSTOM' && (
+                                        <input 
+                                            placeholder="Valor"
+                                            value={rule.op2}
+                                            onChange={(e) => setLogicRules(prev => prev.map((r, i) => i === idx ? { ...r, op2: e.target.value } : r))}
+                                            style={{ flex: 1.2, border: '1px solid #e2e8f0', background: 'white', padding: '10px 14px', borderRadius: 12, fontSize: 12, fontWeight: 700 }}
+                                        />
+                                    )}
+
+                                    {logicRules.length > 1 && (
+                                        <button 
+                                            onClick={() => setLogicRules(prev => prev.filter((_, i) => i !== idx))}
+                                            style={{ background: '#fff1f2', border: 'none', color: '#e11d48', padding: 10, borderRadius: 12, cursor: 'pointer' }}
+                                        ><Trash2 size={16}/></button>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+
+                        <button 
+                            onClick={() => setLogicRules(prev => [...prev, { op1: '', rel: '===', op2: '', joiner: '&&' }])}
+                            style={{ width: '100%', padding: '12px', borderRadius: 15, border: '2px dashed #cbd5e1', background: 'transparent', color: '#64748b', fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                        >
+                            <Plus size={16} /> AÑADIR OTRA REGLA
+                        </button>
+                    </div>
+
+                    {/* Preview Area */}
+                    <div style={{ background: 'linear-gradient(to right, #0f172a, #1e293b)', padding: 18, borderRadius: 20, boxShadow: 'inset 0 4px 8px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div>
+                            <div style={{ fontSize: 9, fontWeight: 900, color: '#3b82f6', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                 <GitFork size={12} /> CÓDIGO JAVASCRIPT GENERADO:
+                            </div>
+                            <div style={{ fontFamily: "'Fira Code', monospace", fontSize: 13, color: '#94a3b8', background: 'rgba(0,0,0,0.2)', padding: 12, borderRadius: 10, border: '1px solid rgba(255,255,255,0.05)', wordBreak: 'break-all' }}>
+                                {(() => {
+                                    let c = "";
+                                    logicRules.forEach((r, i) => {
+                                        let part = r.rel === 'CUSTOM' ? r.op1 : (r.rel === '.includes' ? `${r.op1}.includes("${r.op2}")` : `${r.op1} ${r.rel} ${r.op2}`);
+                                        if (i === 0) c = `(${part})`;
+                                        else c += ` ${logicRules[i-1].joiner} (${part})`;
+                                    });
+                                    return c || '...';
+                                })()}
+                            </div>
+                        </div>
+
+                        {/* LIVE PREVIEW WITH REAL DATA */}
+                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 10 }}>
+                            <div style={{ fontSize: 9, fontWeight: 900, color: '#10b981', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                 <Check size={12} /> TRADUCCIÓN CON DATOS REALES (REGISTRO {recordIdx + 1}):
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <div style={{ flex: 1, fontFamily: "'Fira Code', monospace", fontSize: 13, color: '#f8fafc', background: 'rgba(16, 185, 129, 0.1)', padding: 12, borderRadius: 10, border: '1px solid rgba(16, 185, 129, 0.2)', wordBreak: 'break-all' }}>
+                                    {(() => {
+                                        const record = dataset?.[recordIdx] || {};
+                                        const keys = Object.keys(record);
+                                        let c = "";
+                                        
+                                        const resolveText = (text) => {
+                                            if (!text) return '""';
+                                            let res = text;
+                                            // First replace {{var}} specifically
+                                            res = res.replace(/\{\{(.*?)\}\}/g, (match, name) => {
+                                                const k = keys.find(key => key.toLowerCase() === name.toLowerCase());
+                                                if (k) {
+                                                    const v = record[k];
+                                                    return typeof v === 'string' ? `"${v}"` : v;
+                                                }
+                                                return match;
+                                            });
+                                            // Then attempt to replace independent words that match keys
+                                            keys.forEach(k => {
+                                                const regex = new RegExp(`\\b${k}\\b`, 'gi');
+                                                res = res.replace(regex, (match) => {
+                                                    const v = record[k];
+                                                    return typeof v === 'string' ? `"${v}"` : v;
+                                                });
+                                            });
+                                            return res;
+                                        };
+
+                                        logicRules.forEach((r, i) => {
+                                            let part = "";
+                                            if (r.rel === 'CUSTOM') {
+                                                part = resolveText(r.op1);
+                                            } else if (r.rel === '.includes') {
+                                                part = `${resolveText(r.op1)}.includes("${r.op2}")`;
+                                            } else {
+                                                part = `${resolveText(r.op1)} ${r.rel} ${r.op2}`;
+                                            }
+                                            if (i === 0) c = `(${part})`;
+                                            else c += ` ${logicRules[i-1].joiner} (${part})`;
+                                        });
+                                        return c || '...';
+                                    })()}
+                                </div>
+                                
+                                {(() => {
+                                    // Local evaluation for feedback
+                                    try {
+                                        const record = dataset?.[recordIdx] || {};
+                                        let code = "";
+                                        logicRules.forEach((r, i) => {
+                                            let part = r.rel === 'CUSTOM' ? r.op1.replace(/\{\{(.*?)\}\}/g, '$1') : (r.rel === '.includes' ? `${r.op1.replace(/\{\{(.*?)\}\}/g, '$1')}.includes("${r.op2}")` : `${r.op1.replace(/\{\{(.*?)\}\}/g, '$1')} ${r.rel} ${r.op2}`);
+                                            if (i === 0) code = `(${part})`;
+                                            else code += ` ${logicRules[i-1].joiner} (${part})`;
+                                        });
+                                        
+                                        // Case-insensitive proxy like in WorkLayer
+                                        const proxyData = new Proxy(record, {
+                                            get: (target, prop) => {
+                                                if (typeof prop !== 'string') return target[prop];
+                                                if (prop in target) return target[prop];
+                                                const keys = Object.keys(target);
+                                                const iKey = keys.find(k => k.toLowerCase() === prop.toLowerCase());
+                                                return iKey ? target[iKey] : undefined;
+                                            }
+                                        });
+
+                                        const fn = new Function('DATA', `with(DATA) { return (${code}); }`);
+                                        const res = !!fn(proxyData);
+                                        
+                                        return (
+                                            <div style={{ background: res ? '#10b981' : '#ef4444', color: 'white', padding: '8px 15px', borderRadius: 12, fontSize: 10, fontWeight: 900, textAlign: 'center', minWidth: 100, boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
+                                                RESULTADO:<br/>{res ? 'VERDADERO' : 'FALSO'}
+                                            </div>
+                                        );
+                                    } catch (e) {
+                                        return <div style={{ background: '#f59e0b', color: 'white', padding: '8px 15px', borderRadius: 12, fontSize: 10, fontWeight: 900, textAlign: 'center' }}>ERROR EN FORMULA</div>;
+                                    }
+                                })()}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div style={{ display: 'flex', gap: 12 }}>
+                        <button 
+                            onClick={() => setIsLogicModalOpen(false)}
+                            style={{ flex: 1, padding: '16px', borderRadius: 18, border: '1px solid #e2e8f0', background: 'white', color: '#64748b', fontWeight: 900, cursor: 'pointer' }}
+                        >DESCARTAR</button>
+                        <button 
+                            onClick={saveLogicCondition}
+                            style={{ flex: 1.5, padding: '16px', borderRadius: 18, border: 'none', background: '#3b82f6', color: 'white', fontWeight: 900, cursor: 'pointer', boxShadow: '0 10px 40px rgba(59, 130, 246, 0.4)' }}
+                        >APLICAR LÓGICA</button>
+                    </div>
+                  </>
+                )}
+                </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }

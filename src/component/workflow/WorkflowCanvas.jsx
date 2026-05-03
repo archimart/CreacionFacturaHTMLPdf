@@ -21,6 +21,7 @@ import {
 import DocumentDesigner from './DocumentDesigner';
 import DatabaseNodeEditor from './DatabaseNodeEditor';
 import SchedulerNodeEditor from './SchedulerNodeEditor';
+import { saveNodeData, getNodeData } from '../../utils/dbStorage';
 
 // --- ESTILOS COMPARTIDOS Y TEMAS (PREMIUM UI/UX) ---
 const GLOBAL_STYLE = `
@@ -57,18 +58,29 @@ const GLOBAL_STYLE = `
   
   .n8n-handle { width: 14px !important; height: 14px !important; background: var(--node-bg) !important; border: 3px solid var(--primary) !important; border-radius: 50% !important; z-index: 100 !important; }
   .n8n-handle:hover { transform: scale(1.4); box-shadow: 0 0 20px var(--primary-glow); background: var(--primary) !important; }
+
+  /* Table Resizers */
+  .table-resizer:hover .resizer-line { opacity: 1 !important; }
   
   .glass-card { background: var(--surface-glass); backdrop-filter: blur(25px) saturate(200%); border: 1px solid var(--node-border); }
   @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 `;
 
 // --- NODOS MEJORADOS ---
-const GenericNode = ({ icon: Icon, title, desc, color, children, selected }) => (
-  <div className="premium-node" style={{ 
+const GenericNode = ({ icon: Icon, title, desc, color, children, selected, theme: localTheme, onToggleTheme }) => (
+  <div className={`premium-node ${localTheme ? `theme-${localTheme}` : ""}`} style={{ 
     background: 'var(--node-bg)', borderRadius: 20, border: `1.5px solid ${selected ? 'var(--primary)' : 'var(--node-border)'}`, 
     boxShadow: selected ? '0 0 0 4px var(--primary-glow), var(--box-shadow)' : 'var(--box-shadow)', 
-    width: 280, display: 'flex', flexDirection: 'column', overflow: 'hidden' 
+    width: 280, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative'
   }}>
+    {onToggleTheme && (
+      <button 
+        onClick={(e) => { e.stopPropagation(); onToggleTheme(); }}
+        style={{ position: 'absolute', top: 12, right: 12, width: 24, height: 24, borderRadius: '50%', background: 'var(--surface-glass)', border: '1px solid var(--node-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--node-text)', zIndex: 10 }}
+      >
+        {localTheme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
+      </button>
+    )}
     <div style={{ display: 'flex', alignItems: 'center', padding: '18px 24px' }}>
       <div style={{ width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 14, background: `${color}18`, color: color, border: `1.5px solid ${color}35` }}>
         <Icon size={24} strokeWidth={2.5} />
@@ -85,7 +97,7 @@ const GenericNode = ({ icon: Icon, title, desc, color, children, selected }) => 
 const InvoiceNode = ({ data, selected }) => (
   <div onDoubleClick={() => data.onOpen?.(data.id)} style={{ cursor: 'pointer', position: 'relative' }}>
     <Handle type="target" position={Position.Left} className="n8n-handle" />
-    <GenericNode icon={FileText} title="Diseño Documento" desc="Plantilla Multi-Hoja" color="#f43f5e" selected={selected}>
+    <GenericNode icon={FileText} title="Diseño Documento" desc="Plantilla Multi-Hoja" color="#f43f5e" selected={selected} theme={data.theme} onToggleTheme={() => data.onToggleTheme(data.id)}>
       <div style={{ background: 'rgba(244, 63, 94, 0.12)', color: '#f43f5e', padding: '6px 12px', borderRadius: 8, fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Settings size={14} /> Configurar Diseño <ChevronRight size={14} />
       </div>
@@ -97,7 +109,7 @@ const InvoiceNode = ({ data, selected }) => (
 const InputNode = ({ data, selected }) => (
   <div onDoubleClick={() => data.onOpen?.(data.id)} style={{ cursor: "pointer", position: 'relative' }}>
     <Handle type="target" position={Position.Left} className="n8n-handle" />
-    <GenericNode icon={Database} title="Origen de Datos" desc="SQL / API Integration" color="#7c3aed" selected={selected}>
+    <GenericNode icon={Database} title="Origen de Datos" desc="SQL / API Integration" color="#7c3aed" selected={selected} theme={data.theme} onToggleTheme={() => data.onToggleTheme(data.id)}>
         {data.records?.length > 0 ? (
           <div style={{ background: 'rgba(124, 58, 237, 0.12)', color: '#a78bfa', padding: '6px 12px', borderRadius: 8, fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Activity size={14} /> {data.records.length} Registros Activos
@@ -108,9 +120,9 @@ const InputNode = ({ data, selected }) => (
   </div>
 );
 
-const EmailNode = ({ selected }) => <div style={{ position: 'relative' }}><Handle type="target" position={Position.Left} className="n8n-handle" /><GenericNode icon={Mail} title="SMTP Dispatcher" desc="Envío Automático" color="#ea580c" selected={selected} /><Handle type="source" position={Position.Right} className="n8n-handle" /></div>;
-const SMSNode = ({ selected }) => <div style={{ position: 'relative' }}><Handle type="target" position={Position.Left} className="n8n-handle" /><GenericNode icon={Smartphone} title="WhatsApp Cloud" desc="Notificación Push" color="#16a34a" selected={selected} /><Handle type="source" position={Position.Right} className="n8n-handle" /></div>;
-const ScheduleNode = ({ data, selected }) => <div onDoubleClick={() => data.onOpen?.(data.id)} style={{ position: 'relative', cursor: 'pointer' }}><GenericNode icon={Clock} title="Task Scheduler" desc="CRON Execution" color="#eab308" selected={selected} /><Handle type="source" position={Position.Right} className="n8n-handle" /></div>;
+const EmailNode = ({ data, selected }) => <div style={{ position: 'relative' }}><Handle type="target" position={Position.Left} className="n8n-handle" /><GenericNode icon={Mail} title="SMTP Dispatcher" desc="Envío Automático" color="#ea580c" selected={selected} theme={data.theme} onToggleTheme={() => data.onToggleTheme(data.id)} /><Handle type="source" position={Position.Right} className="n8n-handle" /></div>;
+const SMSNode = ({ data, selected }) => <div style={{ position: 'relative' }}><Handle type="target" position={Position.Left} className="n8n-handle" /><GenericNode icon={Smartphone} title="WhatsApp Cloud" desc="Notificación Push" color="#16a34a" selected={selected} theme={data.theme} onToggleTheme={() => data.onToggleTheme(data.id)} /><Handle type="source" position={Position.Right} className="n8n-handle" /></div>;
+const ScheduleNode = ({ data, selected }) => <div onDoubleClick={() => data.onOpen?.(data.id)} style={{ position: 'relative', cursor: 'pointer' }}><GenericNode icon={Clock} title="Task Scheduler" desc="CRON Execution" color="#eab308" selected={selected} theme={data.theme} onToggleTheme={() => data.onToggleTheme(data.id)} /><Handle type="source" position={Position.Right} className="n8n-handle" /></div>;
 
 export default function WorkflowCanvas({ initialInvoiceData }) {
   const [theme, setTheme] = useState('dark');
@@ -138,8 +150,24 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
 
   const nodesWithHandlers = useMemo(() => nodes.map(n => ({
     ...n,
-    data: { ...n.data, onOpen: (id) => n.type === 'invoice' ? setEditingInvoiceId(id) : setEditingDatabaseId(id) }
-  })), [nodes]);
+    data: { 
+      ...n.data, 
+      id: n.id,
+      theme: n.data.theme || theme, // Usa el del nodo o el global
+      onToggleTheme: (id) => {
+          setNodes(nds => nds.map(node => {
+              if (node.id !== id) return node;
+              const currentTheme = node.data.theme || theme;
+              return { ...node, data: { ...node.data, theme: currentTheme === 'dark' ? 'light' : 'dark' } };
+          }));
+      },
+      onOpen: (id) => {
+          if (n.type === 'invoice') setEditingInvoiceId(id);
+          else if (n.type === 'database') setEditingDatabaseId(id);
+          else if (n.type === 'schedule') setEditingScheduleId(true);
+      }
+    }
+  })), [nodes, theme]);
 
   // LOAD SESSION
   useEffect(() => {
@@ -147,9 +175,23 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
     if (saved) { 
         try { 
             const p = JSON.parse(saved); 
-            if (p.nodes) setNodes(p.nodes); 
             if (p.edges) setEdges(p.edges); 
             if (p.invoiceData) setInvoiceData(p.invoiceData); 
+            
+            if (p.nodes) {
+                // Recover heavy data from IndexedDB
+                const loadHeavies = async () => {
+                    const enrichedNodes = await Promise.all(p.nodes.map(async n => {
+                        if (n.type === 'database') {
+                            const heavy = await getNodeData(n.id);
+                            if (heavy) return { ...n, data: { ...n.data, ...heavy } };
+                        }
+                        return n;
+                    }));
+                    setNodes(enrichedNodes);
+                };
+                loadHeavies();
+            }
         } catch(e) { console.error("Load failed", e); } 
     }
   }, [setNodes, setEdges]);
@@ -158,40 +200,37 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
   useEffect(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     
-    saveTimeoutRef.current = setTimeout(() => {
+    saveTimeoutRef.current = setTimeout(async () => {
         try {
-            const payload = JSON.stringify({ nodes, edges, invoiceData });
+            // 1. Offload heavy data to IndexedDB
+            nodes.forEach(n => {
+                if (n.type === 'database' && n.data?.records) {
+                    saveNodeData(n.id, { 
+                        records: n.data.records, 
+                        rawRecords: n.data.rawRecords,
+                        sourceType: n.data.sourceType 
+                    });
+                }
+            });
+
+            // 2. Prepare light version for LocalStorage
+            const lightNodes = nodes.map(n => ({ 
+                ...n, 
+                data: { 
+                    ...n.data, 
+                    records: undefined, 
+                    rawRecords: undefined, 
+                    results: undefined, 
+                    dataset: undefined 
+                } 
+            }));
+
+            const payload = JSON.stringify({ nodes: lightNodes, edges, invoiceData });
             localStorage.setItem('invoice_master_save', payload);
         } catch(e) {
-            if (e.name === 'QuotaExceededError' || e.message?.includes('quota')) {
-                console.warn("Storage quota exceeded. Clearing non-essential data...");
-                // Aggressive cleaning strategy
-                try {
-                    // 1. Remove heavy datasets from nodes
-                    const lightNodes = nodes.map(n => ({ 
-                        ...n, 
-                        data: { ...n.data, records: undefined, results: undefined } 
-                    }));
-                    
-                    // 2. Try saving this lighter version
-                    const lightPayload = JSON.stringify({ nodes: lightNodes, edges, invoiceData });
-                    if (lightPayload.length < 4000000) { // Keep under 4MB
-                         localStorage.setItem('invoice_master_save', lightPayload);
-                         // showToast("Espacio local lleno. Se guardó versión ligera.", "warning");
-                    } else {
-                         // 3. If still too big, it's likely the images in invoiceData. Clear images/elements if necessary or just save nodes.
-                         const ultraLightPayload = JSON.stringify({ nodes: lightNodes, edges });
-                         localStorage.setItem('invoice_master_save', ultraLightPayload);
-                         showToast("Aviso: Documento demasiado pesado. Solo se guardó la estructura del flujo.", "error");
-                    }
-                } catch(e2) {
-                    // 4. Last resort: clear completely to avoid infinite UI blocking if it's a browser lock
-                    console.error("Critical storage failure - potentially corrupted localStorage", e2);
-                    // localStorage.removeItem('invoice_master_save');
-                }
-            }
+            console.error("Auto-save failed", e);
         }
-    }, 1000); // 1s debounce
+    }, 1000);
 
     return () => clearTimeout(saveTimeoutRef.current);
   }, [nodes, edges, invoiceData]);
@@ -205,17 +244,18 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
   // EDITORS
   if (editingDatabaseId) {
     const node = nodes.find(n => n.id === editingDatabaseId);
+    const nodeTheme = node?.data?.theme || theme;
     return (
-        <div className={theme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--editor-bg)' }}>
+        <div className={nodeTheme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--editor-bg)' }}>
             <style>{GLOBAL_STYLE}</style>
             <div style={{ height: 64, background: 'var(--editor-header)', borderBottom: '1px solid var(--editor-border)', display: 'flex', alignItems: 'center', padding: '0 30px', gap: 20, zIndex: 100 }}>
                 <button onClick={() => setEditingDatabaseId(null)} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 13 }}><ArrowLeft size={18} /> Volver al Flujo</button>
                 <div style={{ color: 'var(--node-text)', fontWeight: 800, fontSize: 16 }}>Configuración de Fuente de Datos</div>
             </div>
             {node?.type === 'schedule' ? (
-                <SchedulerNodeEditor theme={theme} onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
+                <SchedulerNodeEditor theme={nodeTheme} onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
             ) : (
-                <DatabaseNodeEditor theme={theme} onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
+                <DatabaseNodeEditor theme={nodeTheme} onToast={showToast} data={node?.data || {}} onUpdate={p => setNodes(nds => nds.map(n => n.id === editingDatabaseId ? { ...n, data: { ...n.data, ...p } } : n))} />
             )}
         </div>
     );
@@ -223,15 +263,17 @@ export default function WorkflowCanvas({ initialInvoiceData }) {
 
   if (editingInvoiceId) {
     const dbNode = nodes.find(n => n.type === 'database');
+    const invoiceNode = nodes.find(n => n.id === editingInvoiceId);
+    const nodeTheme = invoiceNode?.data?.theme || theme;
     const dataset = dbNode?.data?.records || [];
     return (
-      <div className={theme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--editor-bg)' }}>
+      <div className={nodeTheme === 'dark' ? 'theme-dark' : 'theme-light'} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--editor-bg)' }}>
         <style>{GLOBAL_STYLE}</style>
         <div style={{ height: 64, background: 'var(--editor-header)', borderBottom: '1px solid var(--editor-border)', display: 'flex', alignItems: 'center', padding: '0 30px', gap: 20, zIndex: 100 }}>
             <button onClick={() => setEditingInvoiceId(null)} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 13 }}><ArrowLeft size={18} /> Volver al Flujo</button>
             <div style={{ color: 'var(--node-text)', fontWeight: 800, fontSize: 16 }}>Estudio de Diseño de Documentos</div>
         </div>
-        <DocumentDesigner theme={theme} data={invoiceData} dataset={dataset} onUpdate={d => setInvoiceData(prev => ({ ...prev, ...d }))} />
+        <DocumentDesigner theme={nodeTheme} data={invoiceData} dataset={dataset} onUpdate={d => setInvoiceData(prev => ({ ...prev, ...d }))} />
       </div>
     );
   }

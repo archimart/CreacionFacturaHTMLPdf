@@ -30,36 +30,29 @@ body {
   box-sizing: border-box;
 }
 
-/* Fix inheritance for rich text editor blocks */
-.content-editable-area div, 
-.content-editable-area p,
-.content-editable-area span {
-  text-align: inherit !important;
-  font-family: inherit !important;
-  font-size: inherit !important;
-  color: inherit !important;
-  font-weight: inherit !important;
-  font-style: inherit !important;
-  line-height: inherit !important;
+/* Base styles for rich text editor blocks - No !important here to allow overrides */
+.content-editable-area {
+  outline: none;
 }
 
-/* Fix for images inside text/boxes */
-.content-editable-area img {
-  max-width: 100% !important;
-  height: auto !important;
-  display: inline-block;
-  vertical-align: middle;
-  border-radius: inherit;
+/* Modern smooth rendering for all elements */
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Reset margin/padding for browser-generated blocks */
 .content-editable-area *, .content-editable-area div, .content-editable-area p, .content-editable-area li {
-  line-height: 1.4 !important;
-  word-break: break-word !important;
-  white-space: pre-wrap !important;
-  letter-spacing: normal !important;
-  word-spacing: normal !important;
-  text-rendering: auto !important;
+  line-height: inherit;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Selection styles - High visibility */
+::selection {
+  background: rgba(59, 130, 246, 0.4);
+  color: #fff;
 }
 
 /* Modern smooth rendering for all elements */

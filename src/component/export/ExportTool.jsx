@@ -100,6 +100,10 @@ export default function ExportTool({ getTarget, size, orientation, projectName, 
                           el.style.wordSpacing = 'normal';
                           el.style.fontFeatureSettings = '"kern" 0';
                       });
+
+                      // REMOVE EDITOR UI
+                      clonedDoc.querySelectorAll('.no-export').forEach(el => el.remove());
+                      clonedDoc.querySelectorAll('[style*="outline"]').forEach(el => el.style.outline = 'none');
                   }
               }
             });
@@ -150,6 +154,10 @@ export default function ExportTool({ getTarget, size, orientation, projectName, 
                                   el.setAttribute('contenteditable', 'false');
                                   el.style.fontFamily = "'Inter', Arial, sans-serif";
                               });
+                              
+                              // REMOVE EDITOR UI
+                              clonedDoc.querySelectorAll('.no-export').forEach(el => el.remove());
+                              clonedDoc.querySelectorAll('[style*="outline"]').forEach(el => el.style.outline = 'none');
                           }
                       }
                   });
