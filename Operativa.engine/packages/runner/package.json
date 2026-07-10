@@ -1,0 +1,23 @@
+{
+  "name": "@engine/runner",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CLI Runner para ejecución de flujos en segundo plano",
+  "main": "dist/index.js",
+  "bin": {
+    "engine-run": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@engine/core-logic": "workspace:*",
+    "commander": "^11.0.0",
+    "ndjson": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.4",
+    "@types/node": "^20.0.0"
+  }
+}

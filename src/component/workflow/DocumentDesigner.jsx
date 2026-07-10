@@ -6,8 +6,9 @@ import {
   Box, FileText, Smartphone, Table as TableIcon, Database, Check, History, 
   BarChart2, Plus, Smile, Sliders, Monitor, Crop, 
   MoreHorizontal, ChevronDown, AlignLeft, Info, Grid, List, Search, Play, Sun, Moon,
-  Zap, Save, FileJson, Clock, QrCode, GitBranch, GitFork, Repeat, LayoutTemplate, Hash
+  Zap, Save, FileJson, Clock, QrCode, GitBranch, GitFork, Repeat, LayoutTemplate, Hash, ArrowLeftCircle, ArrowRightCircle
 } from "lucide-react";
+import { DataStreamer } from "@engine/core-logic";
 import PropertiesPanel from "../properties/PropertiesPanel";
 import ExportTool from "../export/ExportTool";
 import WorkLayer from "../WorkLayer";
@@ -27,7 +28,7 @@ const GLASS_STYLE = {
     boxShadow: "0 8px 32px 0 rgba(31, 38, 135, 0.07)"
 };
 
-export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }) {
+export default function DocumentDesigner({ theme, data, dataKey, onUpdate }) {
   const safeData = useMemo(() => ({
     pages: Array.isArray(data?.pages) && data.pages.length > 0 ? data.pages : [{ id: 'p1', name: 'Hoja Principal', bgUrl: "" }],
     elements: Array.isArray(data?.elements) ? data.elements : [],
@@ -39,9 +40,6 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
 
   const [selectedElementId, setSelectedElementId] = useState(null);
 
-  useEffect(() => {
-    window.__EDITOR_DATASET__ = dataset;
-  }, [dataset]);
 
   const [selectedCells, setSelectedCells] = useState([]);
   const [selectionRange, setSelectionRange] = useState(null);
@@ -58,9 +56,46 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
   const [searchQuery, setSearchQuery] = useState("");
   const [dataTabsOpen, setDataTabsOpen] = useState({ globals: true, collections: true });
 
-  const currentDatasetRecord = dataset[recordIdx] || dataset[0] || {};
+  const [isInspectorCollapsed, setIsInspectorCollapsed] = useState(false);
+  
+  // Data Pointer Optimization
+  const [activeRecord, setActiveRecord] = useState({});
+  const [totalRecords, setTotalRecords] = useState(0);
+  const streamer = DataStreamer.getInstance();
+  const designerSessionId = dataKey || `designer-${safeData.id}`;
+
+  useEffect(() => {
+    window.__EDITOR_DATASET__ = activeRecord ? [activeRecord] : [];
+  }, [activeRecord]);
+
+  useEffect(() => {
+    if (!dataKey) return;
+    
+    const unsubscribe = streamer.subscribe(designerSessionId, (chunk) => {
+        if (chunk.isSearchResult) {
+            if (chunk.startIndex !== -1) setRecordIdx(chunk.startIndex);
+            else showToast("No se encontraron coincidencias", "error");
+        } else if (chunk.records && chunk.records.length > 0) {
+            setActiveRecord(chunk.records[0]);
+            if (chunk.total !== undefined) setTotalRecords(chunk.total);
+        }
+    });
+    // Carga inicial
+    streamer.requestRange(designerSessionId, recordIdx, 1);
+    return () => { unsubscribe(); };
+  }, [dataKey, designerSessionId]);
+
+  useEffect(() => {
+    if (dataKey) {
+        streamer.requestRange(designerSessionId, recordIdx, 1);
+    }
+  }, [recordIdx, designerSessionId, dataKey]);
+
+  const currentDatasetRecord = activeRecord || {};
   const datasetGlobals = Object.entries(currentDatasetRecord).filter(([_, v]) => !Array.isArray(v));
   const datasetCollections = Object.entries(currentDatasetRecord).filter(([_, v]) => Array.isArray(v));
+
+  const workLayerDataset = useMemo(() => totalRecords > 0 ? [activeRecord] : [], [totalRecords, activeRecord]);
 
   const [history, setHistory] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
@@ -114,37 +149,10 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
 
   const showToast = (message, type = "success") => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
 
-  const handleSearch = (fromStart = false) => {
+  const handleSearch = () => {
     if (!searchQuery.trim()) return;
-    const q = searchQuery.toLowerCase().trim();
-    
-    // Try to find from current position + 1
-    let foundIdx = -1;
-    const startIndex = fromStart ? 0 : recordIdx + 1;
-
-    for (let i = startIndex; i < dataset.length; i++) {
-        if (Object.values(dataset[i]).some(val => String(val).toLowerCase().includes(q))) {
-            foundIdx = i;
-            break;
-        }
-    }
-
-    // Wrap around to start if not found
-    if (foundIdx === -1 && startIndex > 0) {
-        for (let i = 0; i <= recordIdx; i++) {
-            if (Object.values(dataset[i]).some(val => String(val).toLowerCase().includes(q))) {
-                foundIdx = i;
-                break;
-            }
-        }
-    }
-
-    if (foundIdx !== -1) {
-        setRecordIdx(foundIdx);
-        showToast(`Registro ${foundIdx + 1} de ${dataset.length}`);
-    } else {
-        showToast("No se encontraron coincidencias", "error");
-    }
+    showToast("Buscando en segundo plano...", "info");
+    streamer.search(designerSessionId, searchQuery, recordIdx + 1);
   };
 
   const [versions, setVersions] = useState(() => {
@@ -329,14 +337,15 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
   };
 
     useLayoutEffect(() => {
-        window.__EDITOR_DATASET__ = dataset;
-    }, [dataset]);
+        window.__EDITOR_DATASET__ = activeRecord ? [activeRecord] : [];
+    }, [activeRecord]);
 
   const addElement = (type, extra = {}) => {
     snapshot();
     const id = `${type}-${Date.now()}`;
+    const targetPage = safeData.pages[activePageIdx] || safeData.pages[0];
     const newEl = { 
-        id, type, pageId: safeData.pages[activePageIdx].id, x: 100, y: 100, w: type==='table'?400:200, h: type==='table'?150:100, 
+        id, type, pageId: targetPage?.id || 'p1', x: 100, y: 100, w: type==='table'?400:200, h: type==='table'?150:100, 
         text: type === 'text' ? "Escribe algo..." : "", 
         z: safeData.elements.length,
         style: { 
@@ -761,18 +770,24 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
         </div>
 
         {/* RECORD NAVIGATION BAR */}
-        {dataset && dataset.length > 0 && (
+        {totalRecords > 0 && (
             <div className="glass" style={{ margin: "0 20px 10px 20px", padding: "12px 30px", borderRadius: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div style={{ width: 40, height: 40, borderRadius: 12, background: "rgba(59,130,246,0.1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#3b82f6" }}>
-                            <Database size={20} />
+                            <Zap size={20} fill="#3b82f6" />
                         </div>
                         <div>
-                            <div style={{ fontSize: 10, fontWeight: 900, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1 }}>Vista de Registros</div>
-                            <div style={{ fontSize: 14, fontWeight: 900, color: "var(--node-text)" }}>{dataset.length.toLocaleString()} Cargados</div>
+                            <div style={{ fontSize: 10, fontWeight: 900, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1 }}>Data Streamer Active</div>
+                            <div style={{ fontSize: 14, fontWeight: 900, color: "var(--node-text)" }}>Puntero en Reg. {recordIdx + 1}</div>
                         </div>
                     </div>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 15, background: "var(--btn-bg)", padding: "5px 15px", borderRadius: 15 }}>
+                    <button onClick={() => setRecordIdx(r => Math.max(0, r - 1))} disabled={recordIdx === 0} style={{ border: "none", background: "transparent", color: recordIdx === 0 ? "#444" : "#3b82f6", cursor: "pointer" }}><ArrowLeftCircle size={24}/></button>
+                    <div style={{ fontSize: 13, fontWeight: 900, color: "var(--node-text)", minWidth: 100, textAlign: "center" }}>{recordIdx + 1} / {totalRecords.toLocaleString()}</div>
+                    <button onClick={() => setRecordIdx(r => Math.min(totalRecords - 1, r + 1))} disabled={recordIdx >= totalRecords - 1} style={{ border: "none", background: "transparent", color: recordIdx >= totalRecords - 1 ? "#444" : "#3b82f6", cursor: "pointer" }}><ArrowRightCircle size={24}/></button>
                 </div>
 
                 <div style={{ flex: 1, maxWidth: 400, margin: "0 40px", position: "relative" }}>
@@ -823,12 +838,12 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                         <input 
                             type="number" 
                             min="1" 
-                            max={dataset.length}
+                            max={totalRecords}
                             value={recordIdx + 1}
                             onChange={(e) => {
                                 const val = parseInt(e.target.value);
                                 if (!isNaN(val)) {
-                                    setRecordIdx(Math.max(0, Math.min(dataset.length - 1, val - 1)));
+                                    setRecordIdx(Math.max(0, Math.min(totalRecords - 1, val - 1)));
                                 }
                             }}
                             style={{ 
@@ -837,23 +852,23 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                 boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)"
                             }}
                         />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--node-desc)" }}>de {dataset.length.toLocaleString()}</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--node-desc)" }}>de {totalRecords.toLocaleString()}</span>
                     </div>
 
                     <button 
-                        disabled={recordIdx === dataset.length - 1}
-                        onClick={() => setRecordIdx(prev => Math.min(dataset.length - 1, prev + 1))}
+                        disabled={recordIdx === totalRecords - 1}
+                        onClick={() => setRecordIdx(prev => Math.min(totalRecords - 1, prev + 1))}
                         className="premium-btn" 
-                        style={{ padding: "10px 15px", borderRadius: 12, border: "none", opacity: recordIdx === dataset.length - 1 ? 0.3 : 1 }}
+                        style={{ padding: "10px 15px", borderRadius: 12, border: "none", opacity: recordIdx === totalRecords - 1 ? 0.3 : 1 }}
                     >
                         <ChevronRight size={16}/>
                     </button>
 
                     <button 
-                        disabled={recordIdx === dataset.length - 1}
-                        onClick={() => setRecordIdx(dataset.length - 1)}
+                        disabled={recordIdx === totalRecords - 1}
+                        onClick={() => setRecordIdx(totalRecords - 1)}
                         className="premium-btn" 
-                        style={{ padding: "10px", borderRadius: 12, border: "none", opacity: recordIdx === dataset.length - 1 ? 0.3 : 1 }}
+                        style={{ padding: "10px", borderRadius: 12, border: "none", opacity: recordIdx === totalRecords - 1 ? 0.3 : 1 }}
                         title="Último Registro"
                     >
                         <ChevronsRight size={20}/>
@@ -863,7 +878,7 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                 <div style={{ width: 250, display: "flex", flexDirection: "column", gap: 4 }}>
                     <div style={{ fontSize: 9, fontWeight: 900, color: "#94a3b8", textAlign: "right" }}>PROGRESO DE REVISIÓN</div>
                     <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
-                        <div style={{ width: `${((recordIdx + 1) / dataset.length) * 100}%`, height: "100%", background: "#3b82f6", transition: "width 0.3s ease" }} />
+                        <div style={{ width: `${((recordIdx + 1) / Math.max(1, totalRecords)) * 100}%`, height: "100%", background: "#3b82f6", transition: "width 0.3s ease" }} />
                     </div>
                 </div>
             </div>
@@ -974,7 +989,7 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                     elements={safeData.elements} 
                                     pages={safeData.pages}
                                     activePageIdx={activePageIdx}
-                                    dataset={dataset && dataset.length > 0 ? [dataset[recordIdx]] : []}
+                                    dataset={workLayerDataset}
                                     selectedId={selectedElementId} 
                                     selectedCells={selectedCells}
                                     onSelect={handleSelectId} 
@@ -994,499 +1009,557 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
             </div>
 
             {/* EXPERT INSPECTOR GLASS */}
-            <div className="glass" style={{ width: 400, margin: "0 20px 20px 0", borderRadius: 30, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                <div style={{ display: "flex", borderBottom: "1px solid rgba(0,0,0,0.05)", background: "rgba(255,255,255,0.3)" }}>
-                    {[
-                        { id: 'elements', icon: <Sliders size={18}/>, label: "AJUSTES" }, 
-                        { id: 'layers', icon: <Layers size={18}/>, label: "ORDEN" }, 
-                        { id: 'data', icon: <Database size={18}/>, label: "DATOS" },
-                        { id: 'history', icon: <Clock size={18}/>, label: "LOG" }
-                    ].map(t => (
-                        <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ 
-                            flex: 1, padding: "24px 0", border: "none", background: "none", 
-                            borderBottom: activeTab === t.id ? "4px solid #3b82f6" : "4px solid transparent",
-                            color: activeTab === t.id ? "#1e293b" : "#94a3b8", fontWeight: 900, fontSize: 12, cursor: "pointer",
-                            display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "all 0.3s"
-                        }}>{t.icon} {t.label}</button>
-                    ))}
-                </div>
-                <div style={{ flex: 1, overflowY: "auto", position: "relative" }}>
-                    {activeTab === "elements" && (
-                        <div style={{ animation: "scaleIn 0.3s" }} onMouseDown={e => e.stopPropagation()}>
-                            <PropertiesPanel
-                                key={selectedElementId || 'none'}
-                                el={(() => {
-                                    if (!selectedElementId) return undefined;
-                                    const found = safeData.elements.find(e => e.id === selectedElementId);
-                                    if (found) return found;
-                                    if (selectedElementId.includes(':cell:')) {
-                                        const parts = selectedElementId.split(':');
-                                        const tableId = parts[0];
-                                        const r = parts[2];
-                                        const c = parts[3];
-                                        const tableEl = safeData.elements.find(e => e.id === tableId);
-                                        if (tableEl) {
-                                            return {
-                                                id: selectedElementId,
-                                                type: 'cell',
-                                                _isCell: true,
-                                                style: (tableEl.table?.cellStyles || {})[`${r}:${c}`] || {},
-                                                table: tableEl.table
-                                            };
-                                        }
-                                    }
-                                    return undefined;
-                                })()}
-                                elements={safeData.elements}
-                                dataset={dataset}
-                                selectedCells={selectedCells}
-                                onJoinCells={() => {
-                                    const targetId = (selectedCells[0]?.id || selectedElementId)?.split(':cell:')[0];
-                                    const tableEl = safeData.elements.find(e => e.id === targetId);
-                                    if (!tableEl || selectedCells.length < 2) return;
-                                    const rows = selectedCells.map(c => c.r), cols = selectedCells.map(c => c.c);
-                                    const minR = Math.min(...rows), maxR = Math.max(...rows), minC = Math.min(...cols), maxC = Math.max(...cols);
-                                    const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
-                                    const table = tableEl.table || {};
-                                    const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
-                                    handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
-                                    setSelectedCells([]);
-                                    setSelectionRange(null);
-                                }}
-                                onSplitCells={() => {
-                                    const targetId = (selectedCells[0]?.id || selectedElementId)?.split(':cell:')[0];
-                                    const tableEl = safeData.elements.find(e => e.id === targetId);
-                                    if (!tableEl) return;
-                                    const table = tableEl.table || {};
-                                    
-                                    const targets = selectedCells.length > 0 ? selectedCells : [(() => {
-                                        const p = selectedElementId.split(':');
-                                        return { r: parseInt(p[2]), c: parseInt(p[3]) };
-                                    })()];
+            <div className="glass" style={{ 
+                width: isInspectorCollapsed ? 60 : 400, 
+                margin: "0 20px 20px 0", 
+                borderRadius: 30, 
+                display: "flex", 
+                flexDirection: "column", 
+                overflow: "hidden",
+                transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
+                position: "relative"
+            }}>
+                <button 
+                    onClick={() => setIsInspectorCollapsed(!isInspectorCollapsed)}
+                    style={{
+                        position: "absolute",
+                        top: 20,
+                        right: isInspectorCollapsed ? "50%" : 20,
+                        transform: isInspectorCollapsed ? "translateX(50%)" : "none",
+                        zIndex: 100,
+                        background: isInspectorCollapsed ? "#3b82f6" : "rgba(0,0,0,0.05)",
+                        color: isInspectorCollapsed ? "white" : "#64748b",
+                        border: "none",
+                        width: 32,
+                        height: 32,
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.3s"
+                    }}
+                    title={isInspectorCollapsed ? "Expandir" : "Contraer"}
+                >
+                    {isInspectorCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+                </button>
 
-                                    const newMerges = (table.merges || []).filter(m => {
-                                        const startsMatch = targets.some(sc => 
-                                            sc.r >= m.r && sc.r < m.r + m.rs &&
-                                            sc.c >= m.c && sc.c < m.c + m.cs
-                                        );
-                                        return !startsMatch;
-                                    });
-                                    
-                                    handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
-                                    setSelectedCells([]);
-                                    setSelectionRange(null);
-                                }}
-                                onStyle={(s, noSnap = false) => {
-                                    if (selectedCells && selectedCells.length > 0) {
-                                        // Update multiple cells at once
-                                        const tableId = selectedCells[0].id.split(':cell:')[0];
-                                        const tableEl = safeData.elements.find(e => e.id === tableId);
-                                        if (tableEl) {
-                                            const t = tableEl.table || {};
-                                            const cellStyles = { ...(t.cellStyles || {}) };
-                                            selectedCells.forEach(cell => {
-                                                const parts = cell.id.split(':');
-                                                const r = parts[2];
-                                                const c = parts[3];
-                                                cellStyles[`${r}:${c}`] = { ...(cellStyles[`${r}:${c}`] || {}), ...s };
-                                            });
-                                            handleUpdateElement(tableId, { table: { ...t, cellStyles } }, noSnap);
-                                        }
-                                    } else if (selectedElementId?.includes(':cell:')) {
-                                        const parts = selectedElementId.split(':');
-                                        const tableId = parts[0];
-                                        const r = parts[2];
-                                        const c = parts[3];
-                                        const tableEl = safeData.elements.find(e => e.id === tableId);
-                                        if (tableEl) {
-                                            const t = tableEl.table || {};
-                                            const cellStyles = { ...(t.cellStyles || {}) };
-                                            cellStyles[`${r}:${c}`] = { ...(cellStyles[`${r}:${c}`] || {}), ...s };
-                                            handleUpdateElement(tableId, { table: { ...t, cellStyles } }, noSnap);
-                                        }
-                                    } else {
-                                        handleUpdateElement(selectedElementId, { style: { ...(safeData.elements.find(e => e.id === selectedElementId)?.style || {}), ...s } }, noSnap);
-                                    }
-                                }}
-                                onChange={(p, noSnap = false) => {
-                                    if (selectedElementId?.includes(':cell:')) {
-                                        const [tableId] = selectedElementId.split(':');
-                                        handleUpdateElement(tableId, p, noSnap);
-                                    } else {
-                                        handleUpdateElement(selectedElementId, p, noSnap);
-                                    }
-                                }}
-                                onDelete={handleDelete}
-                            />
+                {!isInspectorCollapsed && (
+                    <>
+                        <div style={{ display: "flex", borderBottom: "1px solid rgba(0,0,0,0.05)", background: "rgba(255,255,255,0.3)", paddingRight: 60 }}>
+                            {[
+                                { id: 'elements', icon: <Sliders size={18}/>, label: "AJUSTES" }, 
+                                { id: 'layers', icon: <Layers size={18}/>, label: "ORDEN" }, 
+                                { id: 'data', icon: <Database size={18}/>, label: "DATOS" },
+                                { id: 'history', icon: <Clock size={18}/>, label: "LOG" }
+                            ].map(t => (
+                                <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ 
+                                    flex: 1, padding: "24px 0", border: "none", background: "none", 
+                                    borderBottom: activeTab === t.id ? "4px solid #3b82f6" : "4px solid transparent",
+                                    color: activeTab === t.id ? "#1e293b" : "#94a3b8", fontWeight: 900, fontSize: 12, cursor: "pointer",
+                                    display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "all 0.3s"
+                                }}>{t.icon} {t.label}</button>
+                            ))}
+                        </div>
+                    </>
+                )}
 
-                            {/* PERSISTENT TABLE ACTIONS BAR (Always visible if cells selected) */}
-                            {selectedCells.length > 0 && (
-                                <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "20px", background: "white", borderTop: "2px solid #3b82f6", boxShadow: "0 -10px 25px rgba(0,0,0,0.1)", zIndex: 1000, display: "flex", flexDirection: "column", gap: 10 }}>
-                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                        <span style={{ fontSize: "11px", fontWeight: "900", color: "#3b82f6", textTransform: "uppercase" }}>Asistente de Tabla</span>
-                                        <span style={{ fontSize: "10px", color: "#94a3b8" }}>{selectedCells.length} celdas seleccionadas</span>
-                                    </div>
-                                    
-                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                        <button 
-                                            onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                if (!tableEl) return;
-                                                const table = tableEl.table || {};
-                                                const rows = selectedCells.map(c => c.r), cols = selectedCells.map(c => c.c);
-                                                const minR = Math.min(...rows), maxR = Math.max(...rows), minC = Math.min(...cols), maxC = Math.max(...cols);
-                                                const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
-                                                const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
-                                                handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
-                                                setSelectedCells([]);
-                                                setSelectionRange(null);
-                                            }}
-                                            disabled={selectedCells.length < 2}
-                                            style={{
-                                                flex: 2, padding: "12px", borderRadius: "10px", border: "none",
-                                                background: selectedCells.length < 2 ? "#e2e8f0" : "#3b82f6",
-                                                color: selectedCells.length < 2 ? "#94a3b8" : "white",
-                                                fontSize: "10px", fontWeight: "900", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5
-                                            }}
-                                        >
-                                            <LayoutTemplate size={14} /> UNIR
-                                        </button>
+                {isInspectorCollapsed && (
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 80, gap: 25 }}>
+                        {[
+                            { id: 'elements', icon: <Sliders size={20}/> }, 
+                            { id: 'layers', icon: <Layers size={20}/> }, 
+                            { id: 'data', icon: <Database size={20}/> },
+                            { id: 'history', icon: <Clock size={20}/> }
+                        ].map(t => (
+                            <button key={t.id} onClick={() => { setActiveTab(t.id); setIsInspectorCollapsed(false); }} style={{ 
+                                border: "none", background: activeTab === t.id ? "rgba(59,130,246,0.1)" : "none", 
+                                color: activeTab === t.id ? "#3b82f6" : "#94a3b8", padding: 12, borderRadius: 15, cursor: "pointer",
+                                transition: "all 0.2s"
+                            }}>{t.icon}</button>
+                        ))}
+                    </div>
+                )}
 
-                                        <button 
-                                            onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                if (!tableEl) return;
-                                                const table = tableEl.table || {};
-                                                const newMerges = (table.merges || []).filter(m => {
-                                                    const intersect = selectedCells.some(sc => 
-                                                        sc.r >= m.r && sc.r < m.r + m.rs &&
-                                                        sc.c >= m.c && sc.c < m.c + m.cs
-                                                    );
-                                                    return !intersect;
+                {!isInspectorCollapsed && (
+                    <div style={{ flex: 1, overflowY: "auto", position: "relative" }}>
+                        {activeTab === "elements" && (
+                            <div style={{ animation: "scaleIn 0.3s" }} onMouseDown={e => e.stopPropagation()}>
+                                <PropertiesPanel
+                                    key={selectedElementId || 'none'}
+                                    el={(() => {
+                                        if (!selectedElementId) return undefined;
+                                        const found = safeData.elements.find(e => e.id === selectedElementId);
+                                        if (found) return found;
+                                        if (selectedElementId.includes(':cell:')) {
+                                            const parts = selectedElementId.split(':');
+                                            const tableId = parts[0];
+                                            const r = parts[2];
+                                            const c = parts[3];
+                                            const tableEl = safeData.elements.find(e => e.id === tableId);
+                                            if (tableEl) {
+                                                return {
+                                                    id: selectedElementId,
+                                                    type: 'cell',
+                                                    _isCell: true,
+                                                    style: (tableEl.table?.cellStyles || {})[`${r}:${c}`] || {},
+                                                    table: tableEl.table
+                                                };
+                                            }
+                                        }
+                                        return undefined;
+                                    })()}
+                                    elements={safeData.elements}
+                                    dataset={workLayerDataset}
+                                    selectedCells={selectedCells}
+                                    onJoinCells={() => {
+                                        const targetId = (selectedCells[0]?.id || selectedElementId)?.split(':cell:')[0];
+                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                        if (!tableEl || selectedCells.length < 2) return;
+                                        const rows = selectedCells.map(c => c.r), cols = selectedCells.map(c => c.c);
+                                        const minR = Math.min(...rows), maxR = Math.max(...rows), minC = Math.min(...cols), maxC = Math.max(...cols);
+                                        const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
+                                        const table = tableEl.table || {};
+                                        const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
+                                        handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
+                                        setSelectedCells([]);
+                                        setSelectionRange(null);
+                                    }}
+                                    onSplitCells={() => {
+                                        const targetId = (selectedCells[0]?.id || selectedElementId)?.split(':cell:')[0];
+                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                        if (!tableEl) return;
+                                        const table = tableEl.table || {};
+                                        
+                                        const targets = selectedCells.length > 0 ? selectedCells : [(() => {
+                                            const p = selectedElementId.split(':');
+                                            return { r: parseInt(p[2]), c: parseInt(p[3]) };
+                                        })()];
+
+                                        const newMerges = (table.merges || []).filter(m => {
+                                            const startsMatch = targets.some(sc => 
+                                                sc.r >= m.r && sc.r < m.r + m.rs &&
+                                                sc.c >= m.c && sc.c < m.c + m.cs
+                                            );
+                                            return !startsMatch;
+                                        });
+                                        
+                                        handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
+                                        setSelectedCells([]);
+                                        setSelectionRange(null);
+                                    }}
+                                    onStyle={(s, noSnap = false) => {
+                                        if (selectedCells && selectedCells.length > 0) {
+                                            // Update multiple cells at once
+                                            const tableId = selectedCells[0].id.split(':cell:')[0];
+                                            const tableEl = safeData.elements.find(e => e.id === tableId);
+                                            if (tableEl) {
+                                                const t = tableEl.table || {};
+                                                const cellStyles = { ...(t.cellStyles || {}) };
+                                                selectedCells.forEach(cell => {
+                                                    const parts = cell.id.split(':');
+                                                    const r = parts[2];
+                                                    const c = parts[3];
+                                                    cellStyles[`${r}:${c}`] = { ...(cellStyles[`${r}:${c}`] || {}), ...s };
                                                 });
-                                                handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
-                                                setSelectedCells([]);
-                                                setSelectionRange(null);
-                                            }}
-                                            style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f1f5f9", border: "none", fontSize: "10px", fontWeight: "900", color: "#1e293b", cursor: "pointer" }}
-                                        >SEPARAR</button>
+                                                handleUpdateElement(tableId, { table: { ...t, cellStyles } }, noSnap);
+                                            }
+                                        } else if (selectedElementId?.includes(':cell:')) {
+                                            const parts = selectedElementId.split(':');
+                                            const tableId = parts[0];
+                                            const r = parts[2];
+                                            const c = parts[3];
+                                            const tableEl = safeData.elements.find(e => e.id === tableId);
+                                            if (tableEl) {
+                                                const t = tableEl.table || {};
+                                                const cellStyles = { ...(t.cellStyles || {}) };
+                                                cellStyles[`${r}:${c}`] = { ...(cellStyles[`${r}:${c}`] || {}), ...s };
+                                                handleUpdateElement(tableId, { table: { ...t, cellStyles } }, noSnap);
+                                            }
+                                        } else {
+                                            handleUpdateElement(selectedElementId, { style: { ...(safeData.elements.find(e => e.id === selectedElementId)?.style || {}), ...s } }, noSnap);
+                                        }
+                                    }}
+                                    onChange={(p, noSnap = false) => {
+                                        if (selectedElementId?.includes(':cell:')) {
+                                            const [tableId] = selectedElementId.split(':');
+                                            handleUpdateElement(tableId, p, noSnap);
+                                        } else {
+                                            handleUpdateElement(selectedElementId, p, noSnap);
+                                        }
+                                    }}
+                                    onDelete={handleDelete}
+                                />
 
-                                        <div style={{ display: "flex", gap: 4, flex: 3 }}>
-                                            <button onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'add-row', { r: selectedCells[0].r });
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }} title="Añadir fila arriba">FILA +</button>
-                                            <button onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'del-row', { r: selectedCells[0].r });
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }} title="Eliminar fila actual">FILA -</button>
-                                            <button onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'add-col', { c: selectedCells[0].c });
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }} title="Añadir columna">COL +</button>
-                                            <button onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                handleTableAction(targetId, 'del-col', { c: selectedCells[0].c });
-                                            }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }} title="Eliminar columna current">COL -</button>
+                                {/* PERSISTENT TABLE ACTIONS BAR (Always visible if cells selected) */}
+                                {selectedCells.length > 0 && (
+                                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "20px", background: "white", borderTop: "2px solid #3b82f6", boxShadow: "0 -10px 25px rgba(0,0,0,0.1)", zIndex: 1000, display: "flex", flexDirection: "column", gap: 10 }}>
+                                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                            <span style={{ fontSize: "11px", fontWeight: "900", color: "#3b82f6", textTransform: "uppercase" }}>Asistente de Tabla</span>
+                                            <span style={{ fontSize: "10px", color: "#94a3b8" }}>{selectedCells.length} celdas seleccionadas</span>
                                         </div>
-                                    </div>
-
-                                    <div style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #f1f5f9", paddingTop: "10px" }}>
-                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
-                                            <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>ALTO FILA (px)</label>
-                                            <input 
-                                                type="number" 
-                                                value={(() => {
+                                        
+                                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                            <button 
+                                                onClick={() => {
                                                     const targetId = selectedCells[0].id.split(':cell:')[0];
                                                     const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                    return tableEl?.table?.rowHeights?.[selectedCells[0].r] || "";
-                                                })()}
-                                                onChange={(e) => {
-                                                    const val = parseInt(e.target.value);
-                                                    if (isNaN(val)) return;
+                                                    if (!tableEl) return;
+                                                    const table = tableEl.table || {};
+                                                    const rows = selectedCells.map(c => c.r), cols = selectedCells.map(c => c.c);
+                                                    const minR = Math.min(...rows), maxR = Math.max(...rows), minC = Math.min(...cols), maxC = Math.max(...cols);
+                                                    const newMerge = { r: minR, c: minC, rs: maxR - minR + 1, cs: maxC - minC + 1 };
+                                                    const filteredMerges = (table.merges || []).filter(m => !(m.r >= minR && m.r <= maxR && m.c >= minC && m.c <= maxC));
+                                                    handleUpdateElement(targetId, { table: { ...table, merges: [...filteredMerges, newMerge] } });
+                                                    setSelectedCells([]);
+                                                    setSelectionRange(null);
+                                                }}
+                                                disabled={selectedCells.length < 2}
+                                                style={{
+                                                    flex: 2, padding: "12px", borderRadius: "10px", border: "none",
+                                                    background: selectedCells.length < 2 ? "#e2e8f0" : "#3b82f6",
+                                                    color: selectedCells.length < 2 ? "#94a3b8" : "white",
+                                                    fontSize: "10px", fontWeight: "900", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5
+                                                }}
+                                            >
+                                                <LayoutTemplate size={14} /> UNIR
+                                            </button>
+
+                                            <button 
+                                                onClick={() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                    if (!tableEl) return;
+                                                    const table = tableEl.table || {};
+                                                    const newMerges = (table.merges || []).filter(m => {
+                                                        const intersect = selectedCells.some(sc => 
+                                                            sc.r >= m.r && sc.r < m.r + m.rs &&
+                                                            sc.c >= m.c && sc.c < m.c + m.cs
+                                                        );
+                                                        return !intersect;
+                                                    });
+                                                    handleUpdateElement(targetId, { table: { ...table, merges: newMerges } });
+                                                    setSelectedCells([]);
+                                                    setSelectionRange(null);
+                                                }}
+                                                style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f1f5f9", border: "none", fontSize: "10px", fontWeight: "900", color: "#1e293b", cursor: "pointer" }}
+                                            >SEPARAR</button>
+
+                                            <div style={{ display: "flex", gap: 4, flex: 3 }}>
+                                                <button onClick={() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    handleTableAction(targetId, 'add-row', { r: selectedCells[0].r });
+                                                }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }} title="Añadir fila arriba">FILA +</button>
+                                                <button onClick={() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    handleTableAction(targetId, 'del-row', { r: selectedCells[0].r });
+                                                }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }} title="Eliminar fila actual">FILA -</button>
+                                                <button onClick={() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    handleTableAction(targetId, 'add-col', { c: selectedCells[0].c });
+                                                }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "10px", fontWeight: "900", color: "#3b82f6", cursor: "pointer" }} title="Añadir columna">COL +</button>
+                                                <button onClick={() => {
+                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                    handleTableAction(targetId, 'del-col', { c: selectedCells[0].c });
+                                                }} style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "10px", fontWeight: "900", color: "#e11d48", cursor: "pointer" }} title="Eliminar columna current">COL -</button>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #f1f5f9", paddingTop: "10px" }}>
+                                            <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                                <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>ALTO FILA (px)</label>
+                                                <input 
+                                                    type="number" 
+                                                    value={(() => {
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                        return tableEl?.table?.rowHeights?.[selectedCells[0].r] || "";
+                                                    })()}
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value);
+                                                        if (isNaN(val)) return;
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                        const table = tableEl?.table || {};
+                                                        const heights = [...(table.rowHeights || [])];
+                                                        const affectedRows = new Set(selectedCells.map(c => c.r));
+                                                        affectedRows.forEach(r => { heights[r] = val; });
+                                                        handleUpdateElement(targetId, { table: { ...table, rowHeights: heights } });
+                                                    }}
+                                                    style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                                />
+                                            </div>
+                                            <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                                <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>ANCHO COL (px)</label>
+                                                <input 
+                                                    type="number" 
+                                                    value={(() => {
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                        return tableEl?.table?.colWidths?.[selectedCells[0].c] || "";
+                                                    })()}
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value);
+                                                        if (isNaN(val)) return;
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                        const table = tableEl?.table || {};
+                                                        const widths = [...(table.colWidths || [])];
+                                                        const affectedCols = new Set(selectedCells.map(c => c.c));
+                                                        affectedCols.forEach(c => { widths[c] = val; });
+                                                        handleUpdateElement(targetId, { table: { ...table, colWidths: widths } });
+                                                    }}
+                                                    style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #f1f5f9", paddingTop: "10px" }}>
+                                            <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                                <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>TOTAL FILAS</label>
+                                                <input 
+                                                    type="number" 
+                                                    value={(() => {
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                        return tableEl?.table?.rows || 1;
+                                                    })()}
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value);
+                                                        if (isNaN(val)) return;
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        setTableStructure(targetId, 'rows', val);
+                                                    }}
+                                                    style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                                />
+                                            </div>
+                                            <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
+                                                <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>TOTAL COLS</label>
+                                                <input 
+                                                    type="number" 
+                                                    value={(() => {
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        const tableEl = safeData.elements.find(e => e.id === targetId);
+                                                        return tableEl?.table?.cols || 1;
+                                                    })()}
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value);
+                                                        if (isNaN(val)) return;
+                                                        const targetId = selectedCells[0].id.split(':cell:')[0];
+                                                        setTableStructure(targetId, 'cols', val);
+                                                    }}
+                                                    style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
+                                                />
+                                            </div>
+                                            <button 
+                                                onClick={() => {
                                                     const targetId = selectedCells[0].id.split(':cell:')[0];
                                                     const tableEl = safeData.elements.find(e => e.id === targetId);
                                                     const table = tableEl?.table || {};
-                                                    const heights = [...(table.rowHeights || [])];
-                                                    const affectedRows = new Set(selectedCells.map(c => c.r));
-                                                    affectedRows.forEach(r => { heights[r] = val; });
-                                                    handleUpdateElement(targetId, { table: { ...table, rowHeights: heights } });
+                                                    const styles = { ...(table.cellStyles || {}) };
+                                                    selectedCells.forEach(cell => {
+                                                        const coords = `${cell.r}:${cell.c}`;
+                                                        styles[coords] = { ...(styles[coords] || {}), padding: "2px", fontSize: "11px", lineHeight: "1" };
+                                                    });
+                                                    handleUpdateElement(targetId, { table: { ...table, cellStyles: styles } });
+                                                    showToast("Modo Compacto Aplicado");
                                                 }}
-                                                style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
-                                            />
+                                                style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: "10px", fontWeight: "900", color: "#16a34a", cursor: "pointer", alignSelf: "flex-end" }}
+                                            >✨ COMPACTO</button>
                                         </div>
-                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
-                                             <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>ANCHO COL (px)</label>
-                                             <input 
-                                                 type="number" 
-                                                 value={(() => {
-                                                     const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                     const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                     return tableEl?.table?.colWidths?.[selectedCells[0].c] || "";
-                                                 })()}
-                                                 onChange={(e) => {
-                                                     const val = parseInt(e.target.value);
-                                                     if (isNaN(val)) return;
-                                                     const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                     const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                     const table = tableEl?.table || {};
-                                                     const widths = [...(table.colWidths || [])];
-                                                     const affectedCols = new Set(selectedCells.map(c => c.c));
-                                                     affectedCols.forEach(c => { widths[c] = val; });
-                                                     handleUpdateElement(targetId, { table: { ...table, colWidths: widths } });
-                                                 }}
-                                                 style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
-                                             />
-                                         </div>
-                                     </div>
-
-                                     <div style={{ display: "flex", gap: 8, alignItems: "center", borderTop: "1px solid #f1f5f9", paddingTop: "10px" }}>
-                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
-                                            <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>TOTAL FILAS</label>
-                                            <input 
-                                                type="number" 
-                                                value={(() => {
-                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                    return tableEl?.table?.rows || 1;
-                                                })()}
-                                                onChange={(e) => {
-                                                    const val = parseInt(e.target.value);
-                                                    if (isNaN(val)) return;
-                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                    setTableStructure(targetId, 'rows', val);
-                                                }}
-                                                style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
-                                            />
-                                        </div>
-                                        <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4 }}>
-                                            <label style={{ fontSize: "9px", fontWeight: "900", color: "#94a3b8" }}>TOTAL COLS</label>
-                                            <input 
-                                                type="number" 
-                                                value={(() => {
-                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                    const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                    return tableEl?.table?.cols || 1;
-                                                })()}
-                                                onChange={(e) => {
-                                                    const val = parseInt(e.target.value);
-                                                    if (isNaN(val)) return;
-                                                    const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                    setTableStructure(targetId, 'cols', val);
-                                                }}
-                                                style={{ padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", width: "100%" }}
-                                            />
-                                        </div>
-                                        <button 
-                                            onClick={() => {
-                                                const targetId = selectedCells[0].id.split(':cell:')[0];
-                                                const tableEl = safeData.elements.find(e => e.id === targetId);
-                                                const table = tableEl?.table || {};
-                                                const styles = { ...(table.cellStyles || {}) };
-                                                selectedCells.forEach(cell => {
-                                                    const coords = `${cell.r}:${cell.c}`;
-                                                    styles[coords] = { ...(styles[coords] || {}), padding: "2px", fontSize: "11px", lineHeight: "1" };
-                                                });
-                                                handleUpdateElement(targetId, { table: { ...table, cellStyles: styles } });
-                                                showToast("Modo Compacto Aplicado");
-                                            }}
-                                            style={{ flex: 1, padding: "12px", borderRadius: "10px", background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: "10px", fontWeight: "900", color: "#16a34a", cursor: "pointer", alignSelf: "flex-end" }}
-                                        >✨ COMPACTO</button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    {activeTab === "data" && (
-                        <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
-                            <div style={{ marginBottom: 20 }}>
-                                <h3 style={{ fontSize: 13, fontWeight: 900, color: "#1e293b", marginBottom: 4 }}>FUENTES DE DATOS</h3>
-                                <p style={{ fontSize: 11, color: "#64748b" }}>Usa estas variables en tus textos con doble llave: <b>{`{{variable}}`}</b></p>
-                            </div>
-                            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-                                {dataset.length > 0 ? (() => {
-                                    const renderFieldCloud = (fields, colorBase) => (
-                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                                            {fields.map(([k, v]) => (
-                                                <div 
-                                                    key={k} 
-                                                    onClick={() => {
-                                                        const el = safeData.elements.find(e => e.id === selectedElementId);
-                                                        if (el && (el.type === 'logical-if' || el.type === 'logical-else-if')) {
-                                                            const current = el.logic?.condition || "";
-                                                            // Insert raw variable name for JS comparison
-                                                            handleUpdateElement(el.id, { logic: { ...el.logic, condition: current + (current ? " " : "") + k + " === " } });
-                                                            showToast(`Añadiendo ${k} a la expresión`);
-                                                        } else {
-                                                            navigator.clipboard.writeText(`{{${k}}}`);
-                                                            showToast("¡Copiado!");
-                                                        }
-                                                    }}
-                                                    style={{ 
-                                                        flex: "1 1 calc(50% - 10px)", minWidth: 140, padding: "12px", borderRadius: "12px", 
-                                                        background: "white", border: "1px solid #e2e8f0", 
-                                                        boxShadow: "0 2px 4px rgba(0,0,0,0.02)", transition: "all 0.2s",
-                                                        cursor: "pointer"
-                                                    }}
-                                                    className="data-card"
-                                                >
-                                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                                                        <code style={{ fontSize: 10, fontWeight: 900, color: colorBase, background: `${colorBase}10`, padding: "4px 8px", borderRadius: 6 }}>{k}</code>
-                                                    </div>
-                                                    {!Array.isArray(v) && (
-                                                        <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                                            {String(v)}
-                                                        </div>
-                                                    )}
-                                                    {Array.isArray(v) && (
-                                                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-                                                            <div style={{ padding: "4px 8px", borderRadius: 6, background: colorBase, color: "white", fontSize: 9, fontWeight: 900, display: "inline-block" }}>
-                                                                {v.length} LÍNEAS DETECTADAS
-                                                            </div>
-                                                            <div style={{ padding: 8, background: "#f8fafc", borderRadius: 8, border: "1px dashed #e2e8f0" }}>
-                                                                <p style={{ fontSize: 8, fontWeight: 800, color: colorBase, marginBottom: 6, textTransform: "uppercase" }}>SUB-CAMPOS (Repetitivos):</p>
-                                                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-                                                                    {Object.keys(v[0] || {}).map(subKey => (
-                                                                        <div 
-                                                                            key={subKey} 
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                const el = safeData.elements.find(e => e.id === selectedElementId);
-                                                                                if (el && el.type === 'logical-loop') {
-                                                                                    handleUpdateElement(el.id, { logic: { ...el.logic, loop: { ...el.logic.loop, source: k } } });
-                                                                                    showToast(`Bucle asignado a: ${k}`);
-                                                                                } else if (el && (el.type === 'logical-if' || el.type === 'logical-else-if')) {
-                                                                                    const current = el.logic?.condition || "";
-                                                                                    handleUpdateElement(el.id, { logic: { ...el.logic, condition: current + (current ? " " : "") + subKey + " " } });
-                                                                                    showToast(`Añadiendo ${subKey}`);
-                                                                                } else {
-                                                                                    navigator.clipboard.writeText(`{{${subKey}}}`);
-                                                                                    showToast("Tag copiado");
-                                                                                }
-                                                                            }}
-                                                                            style={{ display: "flex", alignItems: "center", gap: 2, background: "white", padding: "1px 4px", borderRadius: 3, border: "1px solid #e2e8f0", cursor: "pointer" }}
-                                                                        >
-                                                                            <code style={{ fontSize: 8, fontWeight: 700, color: "#64748b" }}>{`{{${subKey}}}`}</code>
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-
-                                                                <div style={{ height: '1px', background: '#e2e8f0', margin: '8px 0' }} />
-                                                                <p style={{ fontSize: 8, fontWeight: 800, color: "#64748b", marginBottom: 6, textTransform: "uppercase" }}>VISTA PREVIA (VALORES):</p>
-                                                                <div style={{ overflowX: 'auto', background: 'white', borderRadius: 4, padding: 4 }}>
-                                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8px' }}>
-                                                                        <thead>
-                                                                            <tr>
-                                                                                {Object.keys(v[0] || {}).slice(0, 3).map(sk => <th key={sk} style={{ textAlign: 'left', color: '#94a3b8', borderBottom: '1px solid #f1f5f9' }}>{sk}</th>)}
-                                                                            </tr>
-                                                                        </thead>
-                                                                        <tbody>
-                                                                            {v.slice(0, 2).map((row, ri) => (
-                                                                                <tr key={ri}>
-                                                                                    {Object.values(row).slice(0, 3).map((val, vi) => <td key={vi} style={{ color: '#475569' }}>{String(val)}</td>)}
-                                                                                </tr>
-                                                                            ))}
-                                                                        </tbody>
-                                                                    </table>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    );
-
-                                    return (
-                                        <>
-                                            {datasetGlobals.length > 0 && (
-                                                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                                                    <button 
-                                                        onClick={() => setDataTabsOpen(prev => ({ ...prev, globals: !prev.globals }))}
-                                                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: "left" }}
-                                                    >
-                                                        <div style={{ fontSize: 11, fontWeight: 900, color: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                                                <div style={{ width: 4, height: 12, background: "#3b82f6", borderRadius: 4 }} /> 
-                                                                DATOS GLOBALES (BIBLIOTECA)
-                                                            </div>
-                                                            {dataTabsOpen.globals ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                                        </div>
-                                                    </button>
-                                                    {dataTabsOpen.globals && renderFieldCloud(datasetGlobals, "#3b82f6")}
-                                                </div>
-                                            )}
-                                            
-                                            {datasetCollections.length > 0 && (
-                                                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 10 }}>
-                                                    <button 
-                                                        onClick={() => setDataTabsOpen(prev => ({ ...prev, collections: !prev.collections }))}
-                                                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: "left" }}
-                                                    >
-                                                        <div style={{ fontSize: 11, fontWeight: 900, color: "#8b5cf6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                                                <div style={{ width: 4, height: 12, background: "#8b5cf6", borderRadius: 4 }} /> 
-                                                                DATOS REPETITIVOS (TABLAS)
-                                                            </div>
-                                                            {dataTabsOpen.collections ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                                        </div>
-                                                    </button>
-                                                    {dataTabsOpen.collections && renderFieldCloud(datasetCollections, "#8b5cf6")}
-                                                </div>
-                                            )}
-                                        </>
-                                    );
-                                })() : (
-                                    <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
-                                        No hay datos de muestra cargados.
                                     </div>
                                 )}
                             </div>
-                        </div>
-                    )}
-                    {activeTab === "layers" && (
-                        <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
-                            <OrderList 
-                                items={safeData.elements} 
-                                pages={safeData.pages} 
-                                selectedId={selectedElementId} 
-                                onSelect={setSelectedElementId} 
-                                onTableAction={handleTableAction}
-                                currentRecord={currentDatasetRecord}
-                                evaluateLogic={evaluateLogic}
-                                onRename={(id, val) => {
-                                    if (typeof val === 'object' && val._tableAction) {
-                                        handleTableAction(id, val._tableAction, val.params || {});
-                                    } else if (id.includes(':cell:')) {
-                                        handleUpdateElement(id, val);
-                                    } else {
-                                        handleUpdateElement(id, { label: val });
-                                    }
-                                }}
-                                onDelete={handleDelete}
-                                onRenamePage={(id, name) => handleUpdateElement(id, { name })}
-                                onMovePage={handleMovePage}
-                                onReorder={handleReorderElements}
-                                onDoubleClick={openLogicBuilder}
-                            />
-                        </div>
-                    )}
-                    {activeTab === "history" && (
-                        <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
-                            <VersionHistory 
-                                versions={versions} 
-                                onSave={name => setVersions([{ id: Date.now(), name, timestamp: Date.now(), data: JSON.parse(JSON.stringify(data)) }, ...versions])}
-                                onUpdate={vid => setVersions(versions.map(v => v.id === vid ? { ...v, data: JSON.parse(JSON.stringify(data)), timestamp: Date.now() } : v))}
-                                onLoad={v => onUpdate(v.data)}
-                                onDelete={id => setVersions(versions.filter(v => v.id !== id))}
-                            />
-                        </div>
-                    )}
+                        )}
+                        {activeTab === "data" && (
+                            <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
+                                <div style={{ marginBottom: 20 }}>
+                                    <h3 style={{ fontSize: 13, fontWeight: 900, color: "#1e293b", marginBottom: 4 }}>FUENTES DE DATOS</h3>
+                                    <p style={{ fontSize: 11, color: "#64748b" }}>Usa estas variables en tus textos con doble llave: <b>{`{{variable}}`}</b></p>
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                                    {Object.keys(currentDatasetRecord).length > 0 ? (() => {
+                                        const renderFieldCloud = (fields, colorBase) => (
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                                                {fields.map(([k, v]) => (
+                                                    <div 
+                                                        key={k} 
+                                                        onClick={() => {
+                                                            const el = safeData.elements.find(e => e.id === selectedElementId);
+                                                            if (el && (el.type === 'logical-if' || el.type === 'logical-else-if')) {
+                                                                const current = el.logic?.condition || "";
+                                                                // Insert raw variable name for JS comparison
+                                                                handleUpdateElement(el.id, { logic: { ...el.logic, condition: current + (current ? " " : "") + k + " === " } });
+                                                                showToast(`Añadiendo ${k} a la expresión`);
+                                                            } else {
+                                                                navigator.clipboard.writeText(`{{${k}}}`);
+                                                                showToast("¡Copiado!");
+                                                            }
+                                                        }}
+                                                        style={{ 
+                                                            flex: "1 1 calc(50% - 10px)", minWidth: 140, padding: "12px", borderRadius: "12px", 
+                                                            background: "white", border: "1px solid #e2e8f0", 
+                                                            boxShadow: "0 2px 4px rgba(0,0,0,0.02)", transition: "all 0.2s",
+                                                            cursor: "pointer"
+                                                        }}
+                                                        className="data-card"
+                                                    >
+                                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                                            <code style={{ fontSize: 10, fontWeight: 900, color: colorBase, background: `${colorBase}10`, padding: "4px 8px", borderRadius: 6 }}>{k}</code>
+                                                        </div>
+                                                        {!Array.isArray(v) && (
+                                                            <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                                                {String(v)}
+                                                            </div>
+                                                        )}
+                                                        {Array.isArray(v) && (
+                                                            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+                                                                <div style={{ padding: "4px 8px", borderRadius: 6, background: colorBase, color: "white", fontSize: 9, fontWeight: 900, display: "inline-block" }}>
+                                                                    {v.length} LÍNEAS DETECTADAS
+                                                                </div>
+                                                                <div style={{ padding: 8, background: "#f8fafc", borderRadius: 8, border: "1px dashed #e2e8f0" }}>
+                                                                    <p style={{ fontSize: 8, fontWeight: 800, color: colorBase, marginBottom: 6, textTransform: "uppercase" }}>SUB-CAMPOS (Repetitivos):</p>
+                                                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                                                                        {Object.keys(v[0] || {}).map(subKey => (
+                                                                            <div 
+                                                                                key={subKey} 
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    const el = safeData.elements.find(e => e.id === selectedElementId);
+                                                                                    if (el && el.type === 'logical-loop') {
+                                                                                        handleUpdateElement(el.id, { logic: { ...el.logic, loop: { ...el.logic.loop, source: k } } });
+                                                                                        showToast(`Bucle asignado a: ${k}`);
+                                                                                    } else if (el && (el.type === 'logical-if' || el.type === 'logical-else-if')) {
+                                                                                        const current = el.logic?.condition || "";
+                                                                                        handleUpdateElement(el.id, { logic: { ...el.logic, condition: current + (current ? " " : "") + subKey + " " } });
+                                                                                        showToast(`Añadiendo ${subKey}`);
+                                                                                    } else {
+                                                                                        navigator.clipboard.writeText(`{{${subKey}}}`);
+                                                                                        showToast("Tag copiado");
+                                                                                    }
+                                                                                }}
+                                                                                style={{ display: "flex", alignItems: "center", gap: 2, background: "white", padding: "1px 4px", borderRadius: 3, border: "1px solid #e2e8f0", cursor: "pointer" }}
+                                                                            >
+                                                                                <code style={{ fontSize: 8, fontWeight: 700, color: "#64748b" }}>{`{{${subKey}}}`}</code>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+
+                                                                    <div style={{ height: '1px', background: '#e2e8f0', margin: '8px 0' }} />
+                                                                    <p style={{ fontSize: 8, fontWeight: 800, color: "#64748b", marginBottom: 6, textTransform: "uppercase" }}>VISTA PREVIA (VALORES):</p>
+                                                                    <div style={{ overflowX: 'auto', background: 'white', borderRadius: 4, padding: 4 }}>
+                                                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8px' }}>
+                                                                            <thead>
+                                                                                <tr>
+                                                                                    {Object.keys(v[0] || {}).slice(0, 3).map(sk => <th key={sk} style={{ textAlign: 'left', color: '#94a3b8', borderBottom: '1px solid #f1f5f9' }}>{sk}</th>)}
+                                                                                </tr>
+                                                                            </thead>
+                                                                            <tbody>
+                                                                                {v.slice(0, 2).map((row, ri) => (
+                                                                                    <tr key={ri}>
+                                                                                        {Object.values(row).slice(0, 3).map((val, vi) => <td key={vi} style={{ color: '#475569' }}>{String(val)}</td>)}
+                                                                                    </tr>
+                                                                                ))}
+                                                                            </tbody>
+                                                                        </table>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        );
+
+                                        return (
+                                            <>
+                                                {datasetGlobals.length > 0 && (
+                                                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                                        <button 
+                                                            onClick={() => setDataTabsOpen(prev => ({ ...prev, globals: !prev.globals }))}
+                                                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: "left" }}
+                                                        >
+                                                            <div style={{ fontSize: 11, fontWeight: 900, color: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                                                    <div style={{ width: 4, height: 12, background: "#3b82f6", borderRadius: 4 }} /> 
+                                                                    DATOS GLOBALES (BIBLIOTECA)
+                                                                </div>
+                                                                {dataTabsOpen.globals ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                            </div>
+                                                        </button>
+                                                        {dataTabsOpen.globals && renderFieldCloud(datasetGlobals, "#3b82f6")}
+                                                    </div>
+                                                )}
+                                                
+                                                {datasetCollections.length > 0 && (
+                                                    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 10 }}>
+                                                        <button 
+                                                            onClick={() => setDataTabsOpen(prev => ({ ...prev, collections: !prev.collections }))}
+                                                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", textAlign: "left" }}
+                                                        >
+                                                            <div style={{ fontSize: 11, fontWeight: 900, color: "#8b5cf6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                                                    <div style={{ width: 4, height: 12, background: "#8b5cf6", borderRadius: 4 }} /> 
+                                                                    DATOS REPETITIVOS (TABLAS)
+                                                                </div>
+                                                                {dataTabsOpen.collections ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                            </div>
+                                                        </button>
+                                                        {dataTabsOpen.collections && renderFieldCloud(datasetCollections, "#8b5cf6")}
+                                                    </div>
+                                                )}
+                                            </>
+                                        );
+                                    })() : (
+                                        <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                                            No hay datos de muestra cargados.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {activeTab === "layers" && (
+                            <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
+                                <OrderList 
+                                    items={safeData.elements} 
+                                    pages={safeData.pages} 
+                                    selectedId={selectedElementId} 
+                                    onSelect={setSelectedElementId} 
+                                    onTableAction={handleTableAction}
+                                    currentRecord={currentDatasetRecord}
+                                    evaluateLogic={evaluateLogic}
+                                    onRename={(id, val) => {
+                                        if (typeof val === 'object' && val._tableAction) {
+                                            handleTableAction(id, val._tableAction, val.params || {});
+                                        } else if (id.includes(':cell:')) {
+                                            handleUpdateElement(id, val);
+                                        } else {
+                                            handleUpdateElement(id, { label: val });
+                                        }
+                                    }}
+                                    onDelete={handleDelete}
+                                    onRenamePage={(id, name) => handleUpdateElement(id, { name })}
+                                    onMovePage={handleMovePage}
+                                    onReorder={handleReorderElements}
+                                    onDoubleClick={openLogicBuilder}
+                                />
+                            </div>
+                        )}
+                        {activeTab === "history" && (
+                            <div style={{ padding: 24, animation: "scaleIn 0.3s" }}>
+                                <VersionHistory 
+                                    versions={versions} 
+                                    onSave={name => setVersions([{ id: Date.now(), name, timestamp: Date.now(), data: JSON.parse(JSON.stringify(data)) }, ...versions])}
+                                    onUpdate={vid => setVersions(versions.map(v => v.id === vid ? { ...v, data: JSON.parse(JSON.stringify(data)), timestamp: Date.now() } : v))}
+                                    onLoad={v => onUpdate(v.data)}
+                                    onDelete={id => setVersions(versions.filter(v => v.id !== id))}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
                 </div>
             </div>
-        </div>
 
         {toast && (
             <div style={{ 
@@ -1581,7 +1654,7 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                                     <label style={{ fontSize: 12, fontWeight: 900, color: '#1e293b' }}>SELECCIONAR ORIGEN DE DATOS</label>
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, maxHeight: 200, overflowY: 'auto', padding: 4 }}>
-                                        {dataset?.[0] && Object.keys(dataset[0]).filter(k => Array.isArray(dataset[0][k])).map(key => (
+                                        {Object.keys(currentDatasetRecord).filter(k => Array.isArray(currentDatasetRecord[k])).map(key => (
                                             <button 
                                                 key={key}
                                                 onClick={() => handleUpdateElement(editingLogicId, { logic: { ...editingEl.logic, loop: { ...editingEl.logic?.loop, source: key } } })}
@@ -1757,12 +1830,15 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
                                                 return match;
                                             });
                                             // Then attempt to replace independent words that match keys
+                                            const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                                             keys.forEach(k => {
-                                                const regex = new RegExp(`\\b${k}\\b`, 'gi');
-                                                res = res.replace(regex, (match) => {
-                                                    const v = record[k];
-                                                    return typeof v === 'string' ? `"${v}"` : v;
-                                                });
+                                                try {
+                                                    const regex = new RegExp(`\\b${escRx(k)}\\b`, 'gi');
+                                                    res = res.replace(regex, (match) => {
+                                                        const v = record[k];
+                                                        return typeof v === 'string' ? `"${v}"` : v;
+                                                    });
+                                                } catch { /* nombre de campo inválido para regex, saltar */ }
                                             });
                                             return res;
                                         };
@@ -1838,6 +1914,6 @@ export default function DocumentDesigner({ theme, data, dataset = [], onUpdate }
             </div>
           );
         })()}
-    </div>
-  );
+        </div>
+    );
 }

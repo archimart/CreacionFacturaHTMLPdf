@@ -38,7 +38,12 @@ const Section = ({ id, label, icon: Icon, children, activeAccordion, setActiveAc
     );
 };
 
-export default function PropertiesPanel({ el, elements = [], onChange, dataset = [], selectedCells = [], onJoinCells, onSplitCells }) {
+export default function PropertiesPanelWrapper(props) {
+    if (!props.el) return <div style={{ width: 320, padding: 40, textAlign: 'center', color: 'var(--node-desc)', fontSize: '12px', background: 'var(--panel-bg)', borderLeft: '1px solid var(--panel-border)', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Selecciona un elemento para editar</div>;
+    return <PropertiesPanel {...props} />;
+}
+
+function PropertiesPanel({ el, elements = [], onChange, dataset = [], selectedCells = [], onJoinCells, onSplitCells }) {
     const [activeAccordion, setActiveAccordion] = useState("chart");
     const [localSize, setLocalSize] = useState(14);
     const [localShadow, setLocalShadow] = useState(0);
@@ -81,9 +86,7 @@ export default function PropertiesPanel({ el, elements = [], onChange, dataset =
             if (match) setLocalShadow(parseInt(match[1]));
         }
     }, [el?.id, s.fontSize, s.boxShadow]);
-
-    if (!el) return <div style={{ width: 320, padding: 40, textAlign: 'center', color: 'var(--node-desc)', fontSize: '12px' }}>Selecciona un elemento para editar</div>;
-
+    // Removed early return to prevent hook order violation
     const handleStyle = (patch) => {
         if (el.type === 'chart') {
             if (chartTarget === 'title') {
@@ -865,7 +868,7 @@ export default function PropertiesPanel({ el, elements = [], onChange, dataset =
                                             onClick={onJoinCells}
                                             style={{ marginTop: 12, width: '100%', padding: '10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: 11, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 4px 12px rgba(59,130,246,0.3)' }}
                                         >
-                                            <Layout size={14} /> UNIR CELDAS SELECCIONADAS
+                                            <LayoutTemplate size={14} /> UNIR CELDAS SELECCIONADAS
                                         </button>
                                     )}
 

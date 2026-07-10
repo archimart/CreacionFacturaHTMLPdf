@@ -2,10 +2,48 @@ import React, { useState, useEffect } from 'react';
 import { Database, FileSpreadsheet, Braces, UploadCloud, Table, Settings, Play, CheckCircle, AlertCircle, Loader2, ChevronRight, ChevronDown, Server, Workflow, RefreshCw, Search } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import { DataStreamer } from '@engine/core-logic';
+import { GlobalDataRegistry } from './registry';
 
-export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
+// Utilidad simple para guardar/leer datasets masivos en IndexedDB (desarrollo/persistencia local)
+const dbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open("OperativaDataCache", 1);
+    request.onupgradeneeded = (e) => {
+        if (!e.target.result.objectStoreNames.contains("datasets")) {
+            e.target.result.createObjectStore("datasets");
+        }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+});
+
+async function saveToCache(id, data) {
+    try {
+        const db = await dbPromise;
+        return new Promise((resolve) => {
+            const tx = db.transaction("datasets", "readwrite");
+            tx.objectStore("datasets").put(data, id);
+            tx.oncomplete = resolve;
+        });
+    } catch (e) { console.warn("No se pudo guardar en caché", e); }
+}
+
+async function loadFromCache(id) {
+    try {
+        const db = await dbPromise;
+        return new Promise((resolve) => {
+            const tx = db.transaction("datasets", "readonly");
+            const req = tx.objectStore("datasets").get(id);
+            req.onsuccess = () => resolve(req.result);
+        });
+    } catch (e) { return null; }
+}
+
+export default function DatabaseNodeEditor({ theme, data = {}, onUpdate, nodeId }) {
+  // nid = identificador estable del nodo (node.id del grafo, no data.id que siempre era undefined)
+  const nid = nodeId || data.id || 'temp';
   const [activeTab, setActiveTab] = useState(data.sourceType || 'excel');
-  const [records, setRecords] = useState(data.records || []);
+  const [records, setRecords] = useState(() => GlobalDataRegistry.get(`${nid}-result`) || data.records || []);
   const [dbConfig, setDbConfig] = useState(data.dbConfig || { type: 'postgres', host: 'localhost', user: 'postgres', pass: '******', dbName: 'facturas_db', query: 'SELECT * FROM clientes LIMIT 50' });
   const [jsonText, setJsonText] = useState(() => {
     if (data.rawJson) return data.rawJson;
@@ -15,20 +53,69 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
   const [isTesting, setIsTesting] = useState(false);
   const [testStatus, setTestStatus] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
-  const [rawRecords, setRawRecords] = useState(data.rawRecords || data.records || []);
+  const [rawRecords, setRawRecords] = useState(() => GlobalDataRegistry.get(`${nid}-raw`) || data.rawRecords || data.records || []);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [showOnlyDuplicates, setShowOnlyDuplicates] = useState(false);
   const [sortConfig, setSortConfig] = useState(data.sortConfig || { field: '', order: 'asc' });
   const [groupConfig, setGroupConfig] = useState(data.groupConfig || { field: '', aggr: 'count' });
 
-  // Sync state from props if they change externally (e.g. undo/redo or initial load)
+  const streamer = DataStreamer.getInstance();
+  const sessionId = data.dataKey || `db-data-${nid}`;
+  const [chunk, setChunk] = useState({ records: [], total: 0, startIndex: 0, endIndex: 0 });
+  const currentPage = Math.floor(chunk.startIndex / 20);
+
+  // Restaurar records de IndexedDB si la página se recargó y no están en memoria
   useEffect(() => {
-    if (data.rawRecords) setRawRecords(data.rawRecords);
-    if (data.records) setRecords(data.records);
-    if (data.sortConfig) setSortConfig(data.sortConfig);
-    if (data.groupConfig) setGroupConfig(data.groupConfig);
-  }, [data.id]); 
+    if (records.length === 0) {
+        loadFromCache(nid).then(cachedData => {
+            if (cachedData && cachedData.length > 0) {
+                GlobalDataRegistry.set(`${nid}-raw`, cachedData);
+                setRawRecords(cachedData);
+                // Aplicar configuraciones existentes al caché cargado
+                if (data.sortConfig?.field || data.groupConfig?.field) {
+                    applyTransformations(cachedData, data.sortConfig || sortConfig, data.groupConfig || groupConfig);
+                } else {
+                    GlobalDataRegistry.set(`${nid}-result`, cachedData);
+                    setRecords(cachedData);
+                }
+            }
+        });
+    }
+    // Limpiar records de la data de React Flow para evitar congelamiento
+    if (data.records && data.records.length > 0) {
+        GlobalDataRegistry.set(`${nid}-raw`, data.rawRecords || data.records);
+        GlobalDataRegistry.set(`${nid}-result`, data.records);
+        setRawRecords(data.rawRecords || data.records);
+        setRecords(data.records);
+        onUpdate({ records: undefined, rawRecords: undefined });
+    }
+  }, [nid]);
+
+  // Inicializamos sesión en el streamer
+  useEffect(() => {
+    if (records.length > 0) {
+        streamer.createSession(sessionId, records);
+        GlobalDataRegistry.set(sessionId, records);
+        GlobalDataRegistry.set(`db-data-${nid}`, records);
+        const unsubscribe = streamer.subscribe(sessionId, (newChunk) => {
+            setChunk(newChunk);
+        });
+        streamer.requestRange(sessionId, currentPage * 20, 20, searchTerm);
+        return () => {
+            unsubscribe();
+            // Mantenemos la sesión viva para el sidebar y nodos downstream
+        };
+    }
+  }, [records, sessionId]);
+
+  // Manejo de búsqueda off-thread
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+        streamer.requestRange(sessionId, 0, 20, searchTerm);
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [searchTerm, sessionId]);
 
   const [expandedRow, setExpandedRow] = useState(null); // id of current expanded row
   const [selectedDb, setSelectedDb] = useState(data.dbConfig?.dbName || data.selectedDb || '');
@@ -65,9 +152,10 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
                 nombre: "Ejemplo " + (i + 1),
                 fecha: new Date().toLocaleDateString()
             }));
-            setRecords(dummyData);
+            const key = `db-data-${nid}`;
+            streamer.createSession(key, dummyData);
             setTestStatus('success');
-            onUpdate({ records: dummyData, sourceType: 'db', dbConfig, selectedDb, selectedTable });
+            onUpdate({ dataKey: key, sourceType: 'db', dbConfig, selectedDb, selectedTable });
         } else {
             setTestStatus('error');
         }
@@ -109,73 +197,97 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
   };
 
   const handleDataParsed = (newData, type) => {
+    const key = `db-data-${nid}`;
+    GlobalDataRegistry.set(`${nid}-raw`, newData);
     setRawRecords(newData);
-    setRecords(newData);
-    setSortConfig({ field: '', order: 'asc' });
-    setGroupConfig({ field: '', aggr: 'count' });
-    onUpdate({ records: newData, rawRecords: newData, sourceType: type });
+    
+    // Guardar en IndexedDB para persistencia entre recargas
+    saveToCache(nid, newData);
+
+    // Si ya existe una configuración de agrupación/orden, aplicarla automáticamente
+    if (sortConfig.field || groupConfig.field) {
+        applyTransformations(newData, sortConfig, groupConfig);
+    } else {
+        GlobalDataRegistry.set(`${nid}-result`, newData);
+        GlobalDataRegistry.set(key, newData);
+        GlobalDataRegistry.set(sessionId, newData);
+        streamer.createSession(key, newData);
+        streamer.requestRange(key, 0, 20);
+        setRecords(newData);
+    }
+
+    onUpdate({ dataKey: key, sourceType: type, records: undefined, rawRecords: undefined });
   };
 
   const applyTransformations = (rawRecords, sort = sortConfig, group = groupConfig) => {
-    let result = [...rawRecords];
+    if (!rawRecords || rawRecords.length === 0) return;
+    
+    setIsParsing(true); // Reusamos isParsing como estado de carga general
 
-    // 1. Grouping
-    if (group.field) {
-        const groups = {};
-        result.forEach(row => {
-            const val = row[group.field];
-            const key = (val !== undefined && val !== null) ? String(val).trim() : 'null';
-            if (!groups[key]) {
-                groups[key] = { ...row, _count: 1, items: [{ ...row }] };
-            } else {
-                groups[key]._count++;
-                groups[key].items.push({ ...row });
-                // Aggregate numeric fields if SUM is selected
-                if (group.aggr === 'sum') {
-                    Object.keys(row).forEach(k => {
-                        if (k === group.field || k === 'items') return;
-                        const val = row[k];
-                        if (typeof val === 'number') {
-                            groups[key][k] += val;
-                        } else if (typeof val === 'string' && !isNaN(parseFloat(val))) {
-                            groups[key][k] = (parseFloat(groups[key][k]) + parseFloat(val)).toString();
+    // Usamos setTimeout para sacar la ejecución del hilo principal y no bloquear la UI
+    setTimeout(() => {
+        let result = [...rawRecords];
+
+        // 1. Agrupación (Grouping)
+        if (group.field) {
+            const groups = new Map();
+            for (let i = 0; i < result.length; i++) {
+                const row = result[i];
+                const val = row[group.field];
+                const key = (val !== undefined && val !== null) ? String(val).trim() : 'null';
+                
+                if (!groups.has(key)) {
+                    groups.set(key, { ...row, _count: 1, items: [{ ...row }] });
+                } else {
+                    const g = groups.get(key);
+                    g._count++;
+                    g.items.push({ ...row });
+                    
+                    if (group.aggr === 'sum') {
+                        for (const k in row) {
+                            if (k === group.field || k === 'items' || k === '_count') continue;
+                            const numVal = parseFloat(row[k]);
+                            if (!isNaN(numVal)) {
+                                g[k] = (parseFloat(g[k] || 0) + numVal);
+                            }
                         }
-                    });
+                    }
                 }
             }
-        });
-        // After grouping, map back to array
-        result = Object.values(groups).map(g => ({
-            ...g,
-            [group.field + '_cantidad']: g._count, 
-            cantidad_grupo: g._count,
-        }));
-    } else {
-        // If no grouping, ensure cantidad_grupo is not there to not mess with filters
-        result = result.map(r => {
-            const { cantidad_grupo, items, ...rest } = r;
-            return rest;
-        });
-    }
+            
+            result = Array.from(groups.values()).map(g => ({
+                ...g,
+                [group.field + '_cantidad']: g._count, 
+                cantidad_grupo: g._count,
+            }));
+        }
 
-    // 2. Sorting
-    if (sort.field) {
-        result.sort((a, b) => {
-            const va = a[sort.field];
-            const vb = b[sort.field];
-            if (va < vb) return sort.order === 'asc' ? -1 : 1;
-            if (va > vb) return sort.order === 'asc' ? 1 : -1;
-            return 0;
-        });
-    }
+        // 2. Ordenación (Sorting)
+        if (sort.field) {
+            const order = sort.order === 'asc' ? 1 : -1;
+            result.sort((a, b) => {
+                const va = a[sort.field];
+                const vb = b[sort.field];
+                if (va < vb) return -1 * order;
+                if (va > vb) return 1 * order;
+                return 0;
+            });
+        }
 
-    setRecords(result);
-    onUpdate({ 
-        records: result, 
-        rawRecords: rawRecords,
-        sortConfig: sort, 
-        groupConfig: group,
-    });
+        const key = `db-data-${nid}`;
+        GlobalDataRegistry.set(`${nid}-result`, result);
+        GlobalDataRegistry.set(key, result);
+        GlobalDataRegistry.set(sessionId, result);
+        streamer.createSession(key, result);
+        streamer.requestRange(key, 0, 20);
+        setRecords(result);
+        onUpdate({ 
+            dataKey: key,
+            sortConfig: sort, 
+            groupConfig: group,
+        });
+        setIsParsing(false);
+    }, 10);
   };
 
   const handleReset = () => {
@@ -186,7 +298,7 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
     setSelectedTable('');
     setSortConfig({ field: '', order: 'asc' });
     setGroupConfig({ field: '', aggr: 'count' });
-    onUpdate({ records: [], rawRecords: [], sourceType: activeTab });
+    onUpdate({ sourceType: activeTab });
   };
 
   const handleJsonManual = () => {
@@ -194,7 +306,7 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
         const parsed = JSON.parse(jsonText);
         const arr = Array.isArray(parsed) ? parsed : [parsed];
         setRecords(arr);
-        onUpdate({ records: arr, sourceType: 'json', rawJson: jsonText });
+        onUpdate({ sourceType: 'json', rawJson: jsonText });
     } catch(err) {
         console.error("JSON Inválido", err);
     }
@@ -217,7 +329,8 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
           </button>
           
           <div style={{ marginTop: 'auto', padding: 20, background: 'var(--editor-header)', borderTop: '1px solid var(--editor-border)', fontSize: 11 }}>
-              <div style={{ marginBottom: 10, fontWeight: 700 }}>Registros cargados: {records.length}</div>
+              <div style={{ marginBottom: 10, fontWeight: 700 }}>Modo: Data Pointer Activo</div>
+              <div style={{ marginBottom: 10, color: 'var(--node-desc)' }}>ID: {data.dataKey || 'Sin datos'}</div>
               {records.length > 0 && (
                   <button 
                     onClick={handleReset}
@@ -415,75 +528,45 @@ export default function DatabaseNodeEditor({ theme, data = {}, onUpdate }) {
                       </div>
                   </div>
 
-                  <div style={{ borderRadius: 12, border: '1px solid var(--editor-border)', overflow: 'hidden' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, color: 'var(--node-text)' }}>
+                  <div style={{ borderRadius: 12, border: '1px solid var(--editor-border)', overflowX: 'auto', overflowY: 'hidden' }}>
+                      <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontSize: 11, color: 'var(--node-text)' }}>
                           <thead>
                               <tr style={{ background: 'var(--editor-header)', borderBottom: '2px solid var(--editor-border)', color: 'var(--node-text)' }}>
                                   <th style={{ width: 30 }}></th>
-                                  {Object.keys(records[0]).filter(k => k !== 'items').map(k => <th key={k} style={{ padding: 12, textAlign: 'left', fontWeight: 800 }}>{k.toUpperCase()}</th>)}
-                                  {groupConfig.field && <th style={{ padding: 12, textAlign: 'center', fontWeight: 800 }}>INFO</th>}
+                                  {chunk.records[0] && Object.keys(chunk.records[0]).filter(k => k !== 'items').map(k => <th key={k} style={{ padding: 12, textAlign: 'left', fontWeight: 800 }}>{k.toUpperCase()}</th>)}
                               </tr>
                           </thead>
                           <tbody>
-                              {records
-                                .filter(r => !searchTerm || JSON.stringify(r).toLowerCase().includes(searchTerm.toLowerCase()))
-                                .filter(r => !showOnlyDuplicates || (r.cantidad_grupo > 1))
-                                .slice(0, 50)
-                                .map((r, i) => {
-                                    const hasItems = Array.isArray(r.items);
-                                    const isExpanded = expandedRow === i;
-                                    return (
-                                        <React.Fragment key={i}>
-                                            <tr style={{ borderBottom: '1px solid var(--editor-border)', background: isExpanded ? 'rgba(59, 130, 246, 0.05)' : 'transparent' }}>
-                                                <td style={{ textAlign: 'center' }}>
-                                                    {hasItems && (
-                                                        <button 
-                                                            onClick={() => setExpandedRow(isExpanded ? null : i)}
-                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                                        >
-                                                            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                                        </button>
-                                                    )}
-                                                </td>
-                                                {Object.keys(records[0]).filter(k => k !== 'items').map(k => (
-                                                    <td key={k} style={{ padding: 12 }}>{String(r[k])}</td>
-                                                ))}
-                                                {groupConfig.field && (
-                                                    <td style={{ padding: 12, textAlign: 'center' }}>
-                                                         <div style={{ padding: '4px 8px', borderRadius: 12, background: r.cantidad_grupo > 1 ? 'rgba(59, 130, 246, 0.1)' : '#f1f5f9', color: r.cantidad_grupo > 1 ? '#3b82f6' : '#64748b', fontSize: 10, fontWeight: 800 }}>
-                                                            {r.cantidad_grupo} fil.
-                                                        </div>
-                                                    </td>
-                                                )}
-                                            </tr>
-                                            {isExpanded && hasItems && (
-                                                <tr>
-                                                    <td colSpan={Object.keys(records[0]).length + 2} style={{ padding: '0 0 15px 40px', background: 'rgba(59, 130, 246, 0.02)' }}>
-                                                        <div style={{ borderLeft: '2px solid #3b82f6', paddingLeft: 15, marginTop: 10 }}>
-                                                            <div style={{ fontWeight: 800, fontSize: 10, marginBottom: 8, color: '#3b82f6' }}>LÍNEAS ANIDADAS (DETALLE)</div>
-                                                            <table style={{ width: '100%', background: 'var(--editor-bg)', border: '1px solid var(--editor-border)', borderRadius: 8 }}>
-                                                                <thead style={{ background: 'var(--editor-header)' }}>
-                                                                    <tr>
-                                                                        {Object.keys(r.items[0]).map(k => <th key={k} style={{ padding: 6, fontSize: 9, textAlign: 'left' }}>{k}</th>)}
-                                                                    </tr>
-                                                                </thead>
-                                                                <tbody>
-                                                                    {r.items.map((item, idx) => (
-                                                                        <tr key={idx} style={{ borderBottom: '1px solid var(--editor-border)' }}>
-                                                                            {Object.keys(r.items[0]).map(k => <td key={k} style={{ padding: 6, fontSize: 10 }}>{String(item[k])}</td>)}
-                                                                        </tr>
-                                                                    ))}
-                                                                </tbody>
-                                                            </table>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            )}
-                                        </React.Fragment>
-                                    );
-                                })}
+                              {(showOnlyDuplicates ? chunk.records.filter(r => (r.cantidad_grupo || 1) > 1) : chunk.records).map((r, i) => (
+                                  <tr key={i} style={{ borderBottom: '1px solid var(--editor-border)' }}>
+                                      <td style={{ textAlign: 'center' }}></td>
+                                      {Object.keys(chunk.records[0] || {}).filter(k => k !== 'items').map(k => (
+                                          <td key={k} style={{ padding: 12 }}>{String(r[k])}</td>
+                                      ))}
+                                  </tr>
+                              ))}
                           </tbody>
                       </table>
+                      
+                      <div style={{ padding: 15, background: 'var(--editor-header)', display: 'flex', justifyContent: 'center', gap: 10 }}>
+                          <button 
+                            disabled={currentPage === 0}
+                            onClick={() => {
+                                const nextPage = currentPage - 1;
+                                if (nextPage >= 0) streamer.requestRange(sessionId, nextPage * 20, 20, searchTerm);
+                            }}
+                            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--editor-border)', background: 'var(--btn-bg)', color: 'var(--node-text)', cursor: 'pointer' }}
+                          >Anterior</button>
+                          <span style={{ fontSize: 12, fontWeight: 700 }}>Página {chunk.total === 0 ? 0 : currentPage + 1} de {Math.max(1, Math.ceil(chunk.total / 20))}</span>
+                          <button 
+                            disabled={(currentPage + 1) * 20 >= chunk.total}
+                            onClick={() => {
+                                const nextPage = currentPage + 1;
+                                if (nextPage * 20 < chunk.total) streamer.requestRange(sessionId, nextPage * 20, 20, searchTerm);
+                            }}
+                            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--editor-border)', background: 'var(--btn-bg)', color: 'var(--node-text)', cursor: 'pointer' }}
+                          >Siguiente</button>
+                      </div>
                   </div>
               </div>
           )}

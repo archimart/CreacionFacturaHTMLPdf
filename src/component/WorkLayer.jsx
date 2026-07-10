@@ -1,5 +1,5 @@
 import React, { useState, useRef, useLayoutEffect, useMemo } from "react";
-import { Move, Layout, Zap, Check } from "lucide-react";
+import { Move, LayoutTemplate, Zap, Check } from "lucide-react";
 import ChartRenderer from "./Chart/ChartRenderer";
 import TableRenderer from "./Table/TableRenderer";
 import BarcodeRenderer from "./Barcode/BarcodeRenderer";
@@ -540,7 +540,7 @@ export default function WorkLayer({ elements = [], pages = [], activePageIdx = 0
       {!isExport && selectedCells.length >= 2 && (
         <div style={{ position: "absolute", zIndex: 9999, padding: "8px", background: "white", borderRadius: "12px", boxShadow: "0 10px 30px rgba(0,0,0,0.15)", border: "1px solid #e2e8f0", top: (elements.find(e => e.id === selectedCells[0].id.split(':cell:')[0])?.y || 0) - 60, left: (elements.find(e => e.id === selectedCells[0].id.split(':cell:')[0])?.x || 0) }}>
             <button onClick={handleMerge} style={{ background: "#3b82f6", color: "white", border: "none", padding: "6px 12px", borderRadius: "8px", fontSize: "11px", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-                <Layout size={14} /> UNIR CELDAS
+                <LayoutTemplate size={14} /> UNIR CELDAS
             </button>
         </div>
       )}

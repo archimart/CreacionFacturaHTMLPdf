@@ -4,7 +4,7 @@
  * - Renderizado en árbol para bloques lógicos
  */
 import { useMemo, useState } from "react";
-import { Layout, Check, Trash2, GitBranch, ChevronRight, ChevronDown } from "lucide-react";
+import { LayoutTemplate, Check, Trash2, GitBranch, ChevronRight, ChevronDown } from "lucide-react";
 
 export default function OrderList({
   items = [], 
@@ -345,7 +345,7 @@ export default function OrderList({
                        <div key={`${el.id}-r-${rIdx}`} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: 'rgba(59,130,246,0.05)', borderRadius: 10, fontSize: 11, color: '#1e293b', border: '1px solid rgba(59,130,246,0.1)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <Layout size={12} color="#3b82f6" /> 
+                                    <LayoutTemplate size={12} color="#3b82f6" /> 
                                     <span style={{ fontWeight: 800 }}>FILA {rIdx + 1}</span>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -429,7 +429,7 @@ export default function OrderList({
                     }}
                 >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
-                        <Layout size={14} />
+                        <LayoutTemplate size={14} />
                         <input 
                             value={p.name || `Página ${pIdx + 1}`}
                             onChange={(e) => onRenamePage?.(p.id, e.target.value)}

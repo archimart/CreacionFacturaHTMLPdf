@@ -108,11 +108,17 @@ export default function ExportTool({ getTarget, size, orientation, projectName, 
               }
             });
 
-            const imgData = canvas.toDataURL("image/jpeg", 0.95);
-            pdf.addImage(imgData, "JPEG", 0, 0, pdfW, pdfH);
-        }
+        const imgData = canvas.toDataURL("image/jpeg", 0.95);
+        
+        // LLAMADA AL MONOREPO (Arquitectura Core-Logic)
+        const { PDFGeneratorService } = await import("@engine/core-logic");
+        await PDFGeneratorService.createDocument([imgData], { 
+          width: pdfW, 
+          height: pdfH, 
+          orientation: orientation || "portrait" 
+        });
 
-        openInTab(pdf);
+      }
     } catch (err) {
         onToast?.("Fallo V6.0: " + err.message, "error");
     } finally {
