@@ -7,7 +7,8 @@ import {
   Background,
   addEdge,
   applyNodeChanges,
-  applyEdgeChanges
+  applyEdgeChanges,
+  useReactFlow
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -106,6 +107,13 @@ function PersistentPdfStage() {
     );
 }
 
+// ─── Puente para acceder a las funciones internas de ReactFlow ──────────────
+const FlowController = React.forwardRef((_, ref) => {
+    const { screenToFlowPosition, fitView } = useReactFlow();
+    React.useImperativeHandle(ref, () => ({ screenToFlowPosition, fitView }), [screenToFlowPosition, fitView]);
+    return null;
+});
+
 // ─── Componente principal ────────────────────────────────────────────────────
 export default function WorkflowCanvas() {
     const [theme, setTheme] = useState('dark');
@@ -116,6 +124,8 @@ export default function WorkflowCanvas() {
     const runAllResolveRef  = useRef(null);                     // resolve() del Promise de espera
     const runAllCancelRef   = useRef(false);                    // señal de cancelación
     const [upstreamLoading, setUpstreamLoading] = useState(false); // spinner al abrir nodo
+    const flowControllerRef = useRef(null);                     // acceso a funciones internas de ReactFlow
+    const canvasMouseRef    = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 }); // posición del mouse en el canvas
     const [newWorkflowPath, setNewWorkflowPath] = useState("C:/NegocioEnMarcha/Workflows");
     const [workflowList, setWorkflowList] = useState([]);
     const [isSaving, setIsSaving] = useState(false);
@@ -132,7 +142,7 @@ export default function WorkflowCanvas() {
     const [newWfName, setNewWfName] = useState("");
     const [isCreatingWf, setIsCreatingWf] = useState(false);
 
-    const showToast = (message) => { setToast({ message }); setTimeout(() => setToast(null), 3000); };
+    const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3500); };
 
     // ── Filesystem helpers ──────────────────────────────────────────────────
     const fetchDirs = async (path) => {
@@ -216,7 +226,16 @@ export default function WorkflowCanvas() {
     // ── Agregar nodo ────────────────────────────────────────────────────────
     const addNode = (type) => {
         if (!activeTab) return;
-        const newNode = { id: `${type}-${Date.now()}`, type, position: { x: 400, y: 300 }, data: { onOpen: (id) => setEditingNodeId(id) } };
+
+        // Calcular posición en el canvas donde está el mouse
+        let position = { x: 250, y: 200 };
+        try {
+            if (flowControllerRef.current?.screenToFlowPosition) {
+                position = flowControllerRef.current.screenToFlowPosition(canvasMouseRef.current);
+            }
+        } catch { /* usar posición por defecto */ }
+
+        const newNode = { id: `${type}-${Date.now()}`, type, position, data: { onOpen: (id) => setEditingNodeId(id) } };
         setOpenWorkflows(prev => {
             const wf = prev[activeTab];
             let nextNodes = [...wf.nodes, newNode];
@@ -233,6 +252,8 @@ export default function WorkflowCanvas() {
         });
         setNodeMenuOpen(false);
         setInsertingEdgeId(null);
+        // Hacer zoom para mostrar el nodo recién creado
+        setTimeout(() => flowControllerRef.current?.fitView({ duration: 400, padding: 0.25 }), 80);
     };
 
     const handleUpdateNodeData = (nodeId, newData) => {
@@ -272,17 +293,28 @@ export default function WorkflowCanvas() {
 
     // ── Cargar / guardar workflow ───────────────────────────────────────────
     const handleLoadWorkflow = async (name, specificPath = newWorkflowPath) => {
+        // Si ya está abierto en esta sesión, solo cambiar de tab
         if (openWorkflows[name]) { setActiveTab(name); return; }
+
         try {
             const r = await fetch(`/api/workflows/load?name=${encodeURIComponent(name)}&baseDir=${encodeURIComponent(specificPath)}`);
             const d = await r.json();
-            if (d.success && d.data) {
-                const loadedNodes = (d.data.nodes || []).map(n => ({ ...n, data: { ...n.data, onOpen: (id) => setEditingNodeId(id) } }));
-                const loadedEdges = (d.data.edges || []).map(e => ({ ...e, type: 'action' }));
-                setOpenWorkflows(prev => ({ ...prev, [name]: { nodes: loadedNodes, edges: loadedEdges, path: specificPath } }));
-                setActiveTab(name);
-            }
-        } catch (e) { console.error(e); }
+
+            // data puede ser null si el archivo no existe aún (workflow nuevo vacío)
+            const rawNodes = d.data?.nodes || [];
+            const rawEdges = d.data?.edges || [];
+
+            const loadedNodes = rawNodes.map(n => ({ ...n, data: { ...n.data, onOpen: (id) => setEditingNodeId(id) } }));
+            const loadedEdges = rawEdges.map(e => ({ ...e, type: 'action' }));
+
+            setOpenWorkflows(prev => ({ ...prev, [name]: { nodes: loadedNodes, edges: loadedEdges, path: specificPath } }));
+            setActiveTab(name);
+
+            if (!d.success) showToast(`Error cargando "${name}"`);
+        } catch (e) {
+            console.error(e);
+            showToast(`No se pudo abrir "${name}"`, 'error');
+        }
     };
 
     const handleSaveWorkflow = async (forcedName = null) => {
@@ -971,9 +1003,13 @@ export default function WorkflowCanvas() {
             </div>
 
             {/* Canvas ReactFlow */}
-            <div style={{ flex: 1, position: 'relative' }}>
+            <div
+                style={{ flex: 1, position: 'relative' }}
+                onMouseMove={e => { canvasMouseRef.current = { x: e.clientX, y: e.clientY }; }}
+            >
                 {activeTab && currentWF ? (
                     <ReactFlow nodes={currentWF.nodes} edges={currentWF.edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} fitView>
+                        <FlowController ref={flowControllerRef} />
                         <Background color="var(--grid-color)" variant="dots" gap={24} size={1} />
                         <Controls />
                         <div style={{ position: 'absolute', bottom: 40, right: 80, zIndex: 1000, display: 'flex', gap: 15 }}>
@@ -1140,8 +1176,8 @@ export default function WorkflowCanvas() {
 
             {/* Toast */}
             {toast && (
-                <div style={{ position: "fixed", bottom: 40, left: "50%", transform: "translateX(-50%)", background: '#1e293b', color: '#fff', padding: "16px 35px", borderRadius: 100, zIndex: 9999, fontWeight: 800 }}>
-                    {toast.message}
+                <div style={{ position: "fixed", bottom: 40, left: "50%", transform: "translateX(-50%)", background: toast.type === 'error' ? '#ef4444' : '#1e293b', color: '#fff', padding: "14px 30px", borderRadius: 100, zIndex: 9999, fontWeight: 800, fontSize: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {toast.type === 'error' ? '⚠️' : '✓'} {toast.message}
                 </div>
             )}
         </div>
