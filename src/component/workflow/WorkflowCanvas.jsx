@@ -129,6 +129,8 @@ export default function WorkflowCanvas() {
     const [activeTab, setActiveTab] = useState(null);
     const [renamingTab, setRenamingTab] = useState(null);
     const [tempName, setTempName] = useState("");
+    const [newWfName, setNewWfName] = useState("");
+    const [isCreatingWf, setIsCreatingWf] = useState(false);
 
     const showToast = (message) => { setToast({ message }); setTimeout(() => setToast(null), 3000); };
 
@@ -146,6 +148,22 @@ export default function WorkflowCanvas() {
             const r = await fetch(`/api/workflows/list?baseDir=${encodeURIComponent(path)}`);
             const d = await r.json();
             if (d.success) setWorkflowList(d.workflows);
+        } catch (e) { console.error(e); }
+    };
+
+    const handleCreateWorkflow = async () => {
+        const name = newWfName.trim() || `Flujo_${Date.now()}`;
+        try {
+            await fetch('/api/workflows/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, baseDir: newWorkflowPath })
+            });
+            setOpenWorkflows(prev => ({ ...prev, [name]: { nodes: [], edges: [], path: newWorkflowPath } }));
+            setActiveTab(name);
+            setWorkflowList(prev => prev.includes(name) ? prev : [...prev, name]);
+            setNewWfName("");
+            setIsCreatingWf(false);
         } catch (e) { console.error(e); }
     };
 
@@ -900,17 +918,42 @@ export default function WorkflowCanvas() {
                     {isSidebarCollapsed ? <ChevronRight size={16}/> : <ArrowLeft size={16}/>}
                 </button>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 15, width: '100%' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: isSidebarCollapsed ? 'center' : 'space-between' }}>
-                        {!isSidebarCollapsed && <div style={{ fontSize: 11, fontWeight: 900, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1.2 }}>Explorador</div>}
-                        <button title="Abrir Explorador" onClick={() => { setIsFolderBrowserOpen(true); fetchDirs(newWorkflowPath); }} className="icon-btn" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', width: 40, height: 40, borderRadius: 12 }}>
-                            <FolderOpen size={20}/>
-                        </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: isSidebarCollapsed ? 'center' : 'space-between', gap: 8 }}>
+                        {!isSidebarCollapsed && <div style={{ fontSize: 11, fontWeight: 900, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1.2 }}>Flujos</div>}
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            {/* Nuevo workflow */}
+                            <button title="Nuevo Flujo" onClick={() => setIsCreatingWf(v => !v)} className="icon-btn" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981', width: 36, height: 36, borderRadius: 10 }}>
+                                <Plus size={18}/>
+                            </button>
+                            {/* Abrir explorador */}
+                            <button title="Cambiar carpeta" onClick={() => { setIsFolderBrowserOpen(true); fetchDirs(newWorkflowPath); }} className="icon-btn" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', width: 36, height: 36, borderRadius: 10 }}>
+                                <FolderOpen size={18}/>
+                            </button>
+                        </div>
                     </div>
+
+                    {/* Input para crear nuevo flujo */}
+                    {!isSidebarCollapsed && isCreatingWf && (
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <input
+                                autoFocus
+                                value={newWfName}
+                                onChange={e => setNewWfName(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') handleCreateWorkflow(); if (e.key === 'Escape') { setIsCreatingWf(false); setNewWfName(''); } }}
+                                placeholder="Nombre del flujo..."
+                                style={{ flex: 1, background: 'var(--input-bg)', border: '1.5px solid #10b981', borderRadius: 10, padding: '8px 12px', color: 'var(--input-text)', fontSize: 13, fontWeight: 600, outline: 'none' }}
+                            />
+                            <button onClick={handleCreateWorkflow} style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 10, padding: '0 12px', fontWeight: 900, cursor: 'pointer', fontSize: 13 }}>
+                                OK
+                            </button>
+                        </div>
+                    )}
+
                     {!isSidebarCollapsed && (
-                        <div style={{ padding: '14px', background: 'var(--node-footer-bg)', borderRadius: 16, border: '1px solid var(--node-border)', display: 'flex', alignItems: 'center', gap: 12 }}>
-                            <HardDrive size={18} color="#3b82f6"/>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--node-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{newWorkflowPath.split(/[/\\]/).pop()}</div>
+                        <div style={{ padding: '10px 14px', background: 'var(--node-footer-bg)', borderRadius: 12, border: '1px solid var(--node-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <HardDrive size={16} color="#3b82f6"/>
+                            <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--node-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{newWorkflowPath.split(/[/\\]/).pop()}</div>
                         </div>
                     )}
                 </div>
